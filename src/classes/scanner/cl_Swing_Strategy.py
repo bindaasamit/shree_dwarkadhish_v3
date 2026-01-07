@@ -350,7 +350,7 @@ class SwingTradingStrategyV2:
         bars_held = current_idx - entry_idx
         pattern = entry_signal['pattern']
         signal_type = entry_signal['signal']
-        
+        entry_price = entry_signal['entry_price']  # Add this line here
         if bars_held < 3:
             return False, ''
         
@@ -411,6 +411,7 @@ class SwingTradingStrategyV2:
             if pattern == 'MOMENTUM_BURST':
                 if data[self.fast_close_col] < data[self.slow_close_col]:
                     return True, 'EMA3 < EMA8'
+
                 if current_idx < 2:
                     return False, ''  # Not enough bars
                 close_minus1 = self.data['Close'].iloc[current_idx-1]
@@ -419,21 +420,29 @@ class SwingTradingStrategyV2:
                 ema200_minus2 = self.data['EMA200'].iloc[current_idx-2]
                 if not (close_minus1 > ema200_minus1 and close_minus2 > ema200_minus2):
                     return True, 'Recent closes not above EMA200'
-                return False, 
+
+                # If within first 3 bars after entry, if price hasn't expanded by ≥ 0.3 × ATR, exit
+                bars_held = current_idx - entry_signal['index']
+                expected_price_increase = round(0.3 * data['ATR'],1)
+                if bars_held <= 3 and ((data['Close'] - entry_price) < expected_price_increase):
+                    return True, f'Insufficient price expansion , expected Increase- {expected_price_increase}'
+                return False, ''  # This line must be present and properly indented
             
             elif pattern == 'BREAKOUT':
                 range_high = get_range_high(current_idx)
                 if not (data['Close'] > range_high):
                     return True, 'Close not > 20-bar consolidation high'
-                if not (data['Close'] > data['EMA50']):
-                    return True, 'Close not > EMA50'
-                recent_high = self.data['High'].iloc[current_idx-5:current_idx].max()
-                prev_high = self.data['High'].iloc[current_idx-10:current_idx-5].max()
-                if not (recent_high >= prev_high):
-                    return True, 'Lower high formed'
-                adx = get_adx(current_idx)
-                if not (adx > 18):
-                    return True, 'ADX not > 18'
+                
+                # Check for two bars: Close[-1] > EMA50[-1] and Close[-2] > EMA50[-2]
+                if current_idx < 2:
+                    return False, ''  # Not enough bars
+                close_minus1 = self.data['Close'].iloc[current_idx-1]
+                ema50_minus1 = self.data['EMA50'].iloc[current_idx-1]
+                close_minus2 = self.data['Close'].iloc[current_idx-2]
+                ema50_minus2 = self.data['EMA50'].iloc[current_idx-2]
+                if not (close_minus1 > ema50_minus1 and close_minus2 > ema50_minus2):
+                    return True, 'Recent closes not above EMA50'
+                
                 return False, ''
             
             elif pattern == 'CONTINUATION':
@@ -607,215 +616,6 @@ class SwingTradingStrategyV2:
     #                         PATTERN DETECTION (LONG) - OPTIMIZED
     # ========================================================================
     
-    def detect_pattern_a_breakout(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized breakout detection."""
-        if i < 100:
-            return False, {}
-        
-        data = self.data.iloc[i]
-        
-        # Pre-calculate reusable values
-        RANGE_LOOKBACK = 20
-        range_high = self.data['High'].iloc[i-RANGE_LOOKBACK:i].max()
-        
-        # Quick structure checks with early exit
-        if data['Close'] <= range_high:
-            return False, {}
-        if data['Close'] <= data['EMA50']:
-            return False, {}
-        
-        close_above_range = True
-        htf_trend_up = True
-        
-        # Vectorized high checks
-        POST_BREAKOUT_BARS = 5
-        recent_high = self.data['High'].iloc[i-POST_BREAKOUT_BARS+1:i+1].max()
-        previous_high = self.data['High'].iloc[i-2*POST_BREAKOUT_BARS+1:i-POST_BREAKOUT_BARS+1].max()
-        no_lower_high = recent_high >= previous_high
-        
-        # ADX check
-        adx_result = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=14)
-        adx = adx_result.iloc[i]['ADX_14'] if adx_result is not None else 0
-        regime_allows_expansion = adx > 18
-        
-        liquidity_ok = self.check_liquidity(i)
-        
-        structure_valid = close_above_range and htf_trend_up and no_lower_high and regime_allows_expansion and liquidity_ok
-        
-        if not structure_valid:
-            return False, {}
-        
-        # Quality score - vectorized
-        avg_atr_20 = self.data['ATR'].iloc[i-20:i].mean()
-        quality_score = sum([
-            data['ATR'] > 1.2 * avg_atr_20,
-            data['RVol'] > 1.2,
-            data['RSI'] > 55 and data['RSI_Rising'],
-            data['Close'] > range_high,
-            not self.has_recent_trap(i, 'LONG', lookback=5)
-        ])
-        
-        quality_details = {
-            'atr_expanded': data['ATR'] > 1.2 * avg_atr_20,
-            'rvol_high': data['RVol'] > 1.2,
-            'rsi_good': data['RSI'] > 55 and data['RSI_Rising'],
-            'close_above_range': data['Close'] > range_high,
-            'no_trap': not self.has_recent_trap(i, 'LONG', lookback=5)
-        }
-
-        details = {
-            'pattern': 'BREAKOUT',
-            'structure_valid': structure_valid,
-            'impulse_score': 0,
-            'impulse_details': {},
-            'quality_score': quality_score,
-            'quality_details': quality_details,
-            'regime': data['Regime']
-        }
-        
-        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
-        
-        return pattern_valid, details
-
-    def detect_pattern_b_pullback(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized pullback detection."""
-        if i < 100:
-            return False, {}
-        
-        data = self.data.iloc[i]
-        
-        # Early exit checks
-        if data['Close'] < data['EMA50']:
-            return False, {}
-        
-        EMA_HTF = 50
-        ema_htf = self.data['Close'].ewm(span=EMA_HTF, adjust=False).mean().iloc[i]
-        ema_slope = self.data['Close'].ewm(span=EMA_HTF, adjust=False).mean().diff().iloc[i]
-        htf_trend_intact = (data['Close'] > ema_htf) and (ema_slope > 0)
-        
-        if not htf_trend_intact:
-            return False, {}
-        
-        pullback_depth_ok = data['Close'] >= ema_htf
-        
-        # Swing low check - optimized
-        SWING_LOOKBACK = 3
-        lows = self.data['Low'].values
-        swing_lows = []
-        for j in range(SWING_LOOKBACK, len(lows) - 1):
-            if lows[j] < lows[j-1] and lows[j] < lows[j+1]:
-                swing_lows.append((j, lows[j]))
-        
-        higher_low_preserved = True
-        if len(swing_lows) >= 2:
-            higher_low_preserved = swing_lows[-1][1] >= swing_lows[-2][1]
-        
-        # Pullback characteristics
-        range_now = data['High'] - data['Low']
-        range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
-        pullback_is_corrective = range_now < 1.3 * range_ma
-        
-        IMPULSE_BARS = 10
-        impulse_range = (self.data['High'] - self.data['Low']).rolling(IMPULSE_BARS).sum()
-        time_decay_ok = impulse_range.iloc[i] < 1.5 * impulse_range.iloc[i-IMPULSE_BARS]
-        
-        liquidity_ok = self.check_liquidity(i)
-        
-        structure_valid = htf_trend_intact and pullback_depth_ok and higher_low_preserved and pullback_is_corrective and time_decay_ok and liquidity_ok
-        
-        if not structure_valid:
-            return False, {}
-        
-        # Quality score
-        quality_score = sum([
-            data['RSI'] >= 45 and data['RSI_Rising'],
-            data['Close'] > self.data['High'].shift(1).iloc[i],
-            not self.is_move_exhausted(i, 'LONG')
-        ])
-        
-        quality_details = {
-            'rsi_good': data['RSI'] >= 45 and data['RSI_Rising'],
-            'close_higher_than_prev': data['Close'] > self.data['High'].shift(1).iloc[i],
-            'not_exhausted': not self.is_move_exhausted(i, 'LONG')
-        }
-
-        details = {
-            'pattern': 'PULLBACK',
-            'structure_valid': structure_valid,
-            'impulse_score': 0,
-            'impulse_details': {},
-            'quality_score': quality_score,
-            'quality_details': quality_details,
-            'regime': data['Regime']
-        }
-        
-        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
-        
-        return pattern_valid, details
-
-    def detect_pattern_c_continuation(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized continuation detection."""
-        if i < 100:
-            return False, {}
-        
-        data = self.data.iloc[i]
-        
-        # Quick early exits
-        if data['Close'] < data['EMA50']:
-            return False, {}
-        if data['Close'] < data['EMA20']:
-            return False, {}
-        
-        EMA_LEN = 50
-        ema = self.data['Close'].ewm(span=EMA_LEN, adjust=False).mean()
-        ema_slope = ema.diff().iloc[i]
-        htf_trend_intact = (data['Close'] > ema.iloc[i]) and (ema_slope > 0)
-        
-        if not htf_trend_intact:
-            return False, {}
-        
-        # Range check
-        range_now = data['High'] - data['Low']
-        range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
-        pullback_is_corrective = range_now < 1.2 * range_ma
-        
-        dynamic_support_held = data['Close'] >= data['EMA20']
-        
-        IMPULSE_BARS = 10
-        impulse_range = (self.data['High'] - self.data['Low']).rolling(IMPULSE_BARS).sum()
-        time_decay_ok = impulse_range.iloc[i] < 1.5 * impulse_range.iloc[i-IMPULSE_BARS]
-        
-        structure_valid = htf_trend_intact and pullback_is_corrective and dynamic_support_held and time_decay_ok
-        
-        if not structure_valid:
-            return False, {}
-        
-        # Quality score
-        quality_score = sum([
-            data['RSI'] > 45 and data['RSI_Rising'],
-            data['Close'] > self.data['High'].shift(1).iloc[i],
-            not self.is_move_exhausted(i, 'LONG')
-        ])
-
-        quality_details = {
-            'rsi_good': data['RSI'] > 45 and data['RSI_Rising'],
-            'close_higher_than_prev': data['Close'] > self.data['High'].shift(1).iloc[i],
-            'not_exhausted': not self.is_move_exhausted(i, 'LONG')}
-        
-        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
-        
-        details = {
-            'pattern': 'CONTINUATION',
-            'structure_valid': structure_valid,
-            'impulse_score': 0,  #just setting to 0 for consistency
-            'impulse_details': {},
-            'quality_score': quality_score,
-            'quality_details': quality_details,
-            'regime': data['Regime']
-        }
-        
-        return pattern_valid, details
-
     def detect_pattern_d_momentum_burst(self, i: int) -> Tuple[bool, Dict]:
         """Optimized momentum burst detection."""
         if i < 100:
@@ -947,11 +747,283 @@ class SwingTradingStrategyV2:
         }
         
         return pattern_valid, details
+
+    def detect_pattern_a_breakout(self, i: int) -> Tuple[bool, Dict]:
+        """Optimized breakout detection."""
+        if i < 100:
+            return False, {}
+        
+        data = self.data.iloc[i]
+        
+        # Pre-calculate reusable values
+        RANGE_LOOKBACK = 20
+        range_high = self.data['High'].iloc[i-RANGE_LOOKBACK:i].max()
+        
+        # Quick structure checks with early exit
+        if data['Close'] <= range_high:
+            return False, {}
+        if data['Close'] <= data['EMA50']:
+            return False, {}
+        
+        close_above_range = True
+        htf_trend_up = True
+        
+        # Vectorized high checks
+        POST_BREAKOUT_BARS = 5
+        recent_high = self.data['High'].iloc[i-POST_BREAKOUT_BARS+1:i+1].max()
+        previous_high = self.data['High'].iloc[i-2*POST_BREAKOUT_BARS+1:i-POST_BREAKOUT_BARS+1].max()
+        no_lower_high = recent_high >= previous_high
+        
+        # ADX check
+        adx_result = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=14)
+        adx = adx_result.iloc[i]['ADX_14'] if adx_result is not None else 0
+        regime_allows_expansion = adx > 18
+        
+        liquidity_ok = self.check_liquidity(i)
+        
+        structure_valid = close_above_range and htf_trend_up and no_lower_high and regime_allows_expansion and liquidity_ok
+        
+        if not structure_valid:
+            return False, {}
+        
+        # Quality score - vectorized
+        avg_atr_20 = self.data['ATR'].iloc[i-20:i].mean()
+        quality_score = sum([
+            data['ATR'] > 1.2 * avg_atr_20,
+            data['RVol'] > 1.2,
+            data['RSI'] > 55 and data['RSI_Rising'],
+            data['Close'] > range_high,
+            not self.has_recent_trap(i, 'LONG', lookback=5)
+        ])
+        
+        quality_details = {
+            'atr_expanded': data['ATR'] > 1.2 * avg_atr_20,
+            'rvol_high': data['RVol'] > 1.2,
+            'rsi_good': data['RSI'] > 55 and data['RSI_Rising'],
+            'close_above_range': data['Close'] > range_high,
+            'no_trap': not self.has_recent_trap(i, 'LONG', lookback=5)
+        }
+
+        details = {
+            'pattern': 'BREAKOUT',
+            'structure_valid': structure_valid,
+            'impulse_score': 0,
+            'impulse_details': {},
+            'quality_score': quality_score,
+            'quality_details': quality_details,
+            'regime': data['Regime']
+        }
+        
+        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
+        
+        return pattern_valid, details
+
+    def detect_pattern_c_continuation(self, i: int) -> Tuple[bool, Dict]:
+        """Optimized continuation detection."""
+        if i < 100:
+            return False, {}
+        
+        data = self.data.iloc[i]
+        
+        # Quick early exits
+        if data['Close'] < data['EMA50']:
+            return False, {}
+        if data['Close'] < data['EMA20']:
+            return False, {}
+        
+        EMA_LEN = 50
+        ema = self.data['Close'].ewm(span=EMA_LEN, adjust=False).mean()
+        ema_slope = ema.diff().iloc[i]
+        htf_trend_intact = (data['Close'] > ema.iloc[i]) and (ema_slope > 0)
+        
+        if not htf_trend_intact:
+            return False, {}
+        
+        # Range check
+        range_now = data['High'] - data['Low']
+        range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
+        pullback_is_corrective = range_now < 1.2 * range_ma
+        
+        dynamic_support_held = data['Close'] >= data['EMA20']
+        
+        IMPULSE_BARS = 10
+        impulse_range = (self.data['High'] - self.data['Low']).rolling(IMPULSE_BARS).sum()
+        time_decay_ok = impulse_range.iloc[i] < 1.5 * impulse_range.iloc[i-IMPULSE_BARS]
+        
+        structure_valid = htf_trend_intact and pullback_is_corrective and dynamic_support_held and time_decay_ok
+        
+        if not structure_valid:
+            return False, {}
+        
+        # Quality score
+        quality_score = sum([
+            data['RSI'] > 45 and data['RSI_Rising'],
+            data['Close'] > self.data['High'].shift(1).iloc[i],
+            not self.is_move_exhausted(i, 'LONG')
+        ])
+
+        quality_details = {
+            'rsi_good': data['RSI'] > 45 and data['RSI_Rising'],
+            'close_higher_than_prev': data['Close'] > self.data['High'].shift(1).iloc[i],
+            'not_exhausted': not self.is_move_exhausted(i, 'LONG')}
+        
+        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
+        
+        details = {
+            'pattern': 'CONTINUATION',
+            'structure_valid': structure_valid,
+            'impulse_score': 0,  #just setting to 0 for consistency
+            'impulse_details': {},
+            'quality_score': quality_score,
+            'quality_details': quality_details,
+            'regime': data['Regime']
+        }
+        
+        return pattern_valid, details
+
+    def detect_pattern_b_pullback(self, i: int) -> Tuple[bool, Dict]:
+        """Optimized pullback detection."""
+        if i < 100:
+            return False, {}
+        
+        data = self.data.iloc[i]
+        
+        # Early exit checks
+        if data['Close'] < data['EMA50']:
+            return False, {}
+        
+        EMA_HTF = 50
+        ema_htf = self.data['Close'].ewm(span=EMA_HTF, adjust=False).mean().iloc[i]
+        ema_slope = self.data['Close'].ewm(span=EMA_HTF, adjust=False).mean().diff().iloc[i]
+        htf_trend_intact = (data['Close'] > ema_htf) and (ema_slope > 0)
+        
+        if not htf_trend_intact:
+            return False, {}
+        
+        pullback_depth_ok = data['Close'] >= ema_htf
+        
+        # Swing low check - optimized
+        SWING_LOOKBACK = 3
+        lows = self.data['Low'].values
+        swing_lows = []
+        for j in range(SWING_LOOKBACK, len(lows) - 1):
+            if lows[j] < lows[j-1] and lows[j] < lows[j+1]:
+                swing_lows.append((j, lows[j]))
+        
+        higher_low_preserved = True
+        if len(swing_lows) >= 2:
+            higher_low_preserved = swing_lows[-1][1] >= swing_lows[-2][1]
+        
+        # Pullback characteristics
+        range_now = data['High'] - data['Low']
+        range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
+        pullback_is_corrective = range_now < 1.3 * range_ma
+        
+        IMPULSE_BARS = 10
+        impulse_range = (self.data['High'] - self.data['Low']).rolling(IMPULSE_BARS).sum()
+        time_decay_ok = impulse_range.iloc[i] < 1.5 * impulse_range.iloc[i-IMPULSE_BARS]
+        
+        liquidity_ok = self.check_liquidity(i)
+        
+        structure_valid = htf_trend_intact and pullback_depth_ok and higher_low_preserved and pullback_is_corrective and time_decay_ok and liquidity_ok
+        
+        if not structure_valid:
+            return False, {}
+        
+        # Quality score
+        quality_score = sum([
+            data['RSI'] >= 45 and data['RSI_Rising'],
+            data['Close'] > self.data['High'].shift(1).iloc[i],
+            not self.is_move_exhausted(i, 'LONG')
+        ])
+        
+        quality_details = {
+            'rsi_good': data['RSI'] >= 45 and data['RSI_Rising'],
+            'close_higher_than_prev': data['Close'] > self.data['High'].shift(1).iloc[i],
+            'not_exhausted': not self.is_move_exhausted(i, 'LONG')
+        }
+
+        details = {
+            'pattern': 'PULLBACK',
+            'structure_valid': structure_valid,
+            'impulse_score': 0,
+            'impulse_details': {},
+            'quality_score': quality_score,
+            'quality_details': quality_details,
+            'regime': data['Regime']
+        }
+        
+        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
+        
+        return pattern_valid, details
     
     # ========================================================================
     #                         PATTERN DETECTION (SHORT) - OPTIMIZED
     # ========================================================================
     
+    def detect_pattern_d_momentum_crash_short(self, i: int) -> Tuple[bool, Dict]:
+        """Optimized momentum crash detection."""
+        if i < 100:
+            return False, {}
+        
+        data = self.data.iloc[i]
+        
+        # Early exits
+        if data['Close'] >= data['EMA200']:
+            return False, {}
+        if data[self.fast_close_col] >= data[self.slow_close_col]:
+            return False, {}
+        
+        ema200_slope = self.data['EMA200'].diff().iloc[i]
+        ema200_slope_down = ema200_slope < 0
+        
+        if not ema200_slope_down:
+            return False, {}
+        
+        supertrend_red = data['ST_Direction'] == 1
+        
+        # No reclaim check - vectorized
+        RECLAIM_BARS = 2
+        lows = self.data['Low'].iloc[i-10:i]
+        last_swing_low = lows.min()
+        reclaim_attempts = self.data['Close'].iloc[i-RECLAIM_BARS+1:i+1] > last_swing_low
+        no_fast_reclaim = not reclaim_attempts.any()
+        
+        liquidity_ok = self.check_liquidity(i)
+        
+        structure_valid = ema200_slope_down and supertrend_red and no_fast_reclaim and liquidity_ok
+        
+        if not structure_valid:
+            return False, {}
+        
+        # Quality score - vectorized
+        avg_atr_20 = self.data['ATR'].iloc[i-20:i].mean()
+        quality_score = sum([
+            data['ATR'] > 1.3 * avg_atr_20,
+            data['Volume'] > 1.5 * self.data['Volume'].rolling(20).mean().iloc[i],
+            data['RSI'] < 40 and data['RSI_Slope'] < 0,
+            not self.is_move_exhausted(i, 'SHORT')
+        ])
+        quality_details = {
+            'atr_expanded': data['ATR'] > 1.3 * avg_atr_20,
+            'volume_high': data['Volume'] > 1.5 * self.data['Volume'].rolling(20).mean().iloc[i],
+            'rsi_crash': data['RSI'] < 40 and data['RSI_Slope'] < 0,
+            'not_exhausted': not self.is_move_exhausted(i, 'SHORT')}
+        
+        pattern_valid = structure_valid and (quality_score >= 1)
+        
+        details = {
+            'pattern': 'MOMENTUM_CRASH',
+            'structure_valid': structure_valid,
+            'impulse_score': 0,  #just setting to 0 for consistency
+            'impulse_details': {},
+            'quality_score': quality_score,
+            'quality_details': quality_details,
+            'regime': data['Regime']
+        }
+        
+        return pattern_valid, details
+
     def detect_pattern_a_breakdown_short(self, i: int) -> Tuple[bool, Dict]:
         """Optimized breakdown detection."""
         if i < 100:
@@ -1018,67 +1090,6 @@ class SwingTradingStrategyV2:
         
         return pattern_valid, details
 
-    def detect_pattern_b_rally_short(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized rally fade detection."""
-        if i < 100:
-            return False, {}
-        
-        data = self.data.iloc[i]
-        
-        # Early exit
-        if data['Close'] >= data['EMA200']:
-            return False, {}
-        
-        ema200_slope = self.data['EMA200'].diff().iloc[i]
-        htf_bearish_regime = (data['Close'] < data['EMA200']) and (ema200_slope <= 0)
-        
-        if not htf_bearish_regime:
-            return False, {}
-        
-        # Rally into supply
-        ema_supply = data['EMA50']
-        SUPPLY_TOL = 0.005
-        rally_into_supply = (data['High'] >= ema_supply * (1 - SUPPLY_TOL)) and (data['Close'] <= ema_supply)
-        
-        # Range check
-        bar_range = data['High'] - data['Low']
-        range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
-        rally_is_corrective = bar_range < 1.3 * range_ma
-        
-        # ADX check
-        adx_result = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=14)
-        adx = adx_result.iloc[i]['ADX_14'] if adx_result is not None else 0
-        no_regime_shift = adx < 25
-        
-        liquidity_ok = self.check_liquidity(i)
-        
-        structure_valid = htf_bearish_regime and rally_into_supply and rally_is_corrective and no_regime_shift and liquidity_ok
-        
-        if not structure_valid:
-            return False, {}
-        
-        # Quality score
-        quality_score = sum([
-            data['RSI'] >= 55 and data['RSI'] <= 65 and data['RSI_Slope'] < 0,
-            not self.is_move_exhausted(i, 'SHORT')
-        ])
-        quality_details = {
-            'rsi_fading': data['RSI'] >= 55 and data['RSI'] <= 65 and data['RSI_Slope'] < 0,
-            'not_exhausted': not self.is_move_exhausted(i, 'SHORT')}
-        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
-        
-        details = {
-            'pattern': 'RALLY_FADE',
-            'structure_valid': structure_valid,
-            'impulse_score': 0,  #just setting to 0 for consistency
-            'impulse_details': {},
-            'quality_score': quality_score,
-            'quality_details': quality_details,
-            'regime': data['Regime']
-        }
-        
-        return pattern_valid, details
-    
     def detect_pattern_c_continuation_short(self, i: int) -> Tuple[bool, Dict]:
         """Optimized continuation short detection."""
         if i < 100:
@@ -1141,59 +1152,57 @@ class SwingTradingStrategyV2:
         
         return pattern_valid, details
     
-    def detect_pattern_d_momentum_crash_short(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized momentum crash detection."""
+    def detect_pattern_b_rally_short(self, i: int) -> Tuple[bool, Dict]:
+        """Optimized rally fade detection."""
         if i < 100:
             return False, {}
         
         data = self.data.iloc[i]
         
-        # Early exits
+        # Early exit
         if data['Close'] >= data['EMA200']:
-            return False, {}
-        if data[self.fast_close_col] >= data[self.slow_close_col]:
             return False, {}
         
         ema200_slope = self.data['EMA200'].diff().iloc[i]
-        ema200_slope_down = ema200_slope < 0
+        htf_bearish_regime = (data['Close'] < data['EMA200']) and (ema200_slope <= 0)
         
-        if not ema200_slope_down:
+        if not htf_bearish_regime:
             return False, {}
         
-        supertrend_red = data['ST_Direction'] == 1
+        # Rally into supply
+        ema_supply = data['EMA50']
+        SUPPLY_TOL = 0.005
+        rally_into_supply = (data['High'] >= ema_supply * (1 - SUPPLY_TOL)) and (data['Close'] <= ema_supply)
         
-        # No reclaim check - vectorized
-        RECLAIM_BARS = 2
-        lows = self.data['Low'].iloc[i-10:i]
-        last_swing_low = lows.min()
-        reclaim_attempts = self.data['Close'].iloc[i-RECLAIM_BARS+1:i+1] > last_swing_low
-        no_fast_reclaim = not reclaim_attempts.any()
+        # Range check
+        bar_range = data['High'] - data['Low']
+        range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
+        rally_is_corrective = bar_range < 1.3 * range_ma
+        
+        # ADX check
+        adx_result = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=14)
+        adx = adx_result.iloc[i]['ADX_14'] if adx_result is not None else 0
+        no_regime_shift = adx < 25
         
         liquidity_ok = self.check_liquidity(i)
         
-        structure_valid = ema200_slope_down and supertrend_red and no_fast_reclaim and liquidity_ok
+        structure_valid = htf_bearish_regime and rally_into_supply and rally_is_corrective and no_regime_shift and liquidity_ok
         
         if not structure_valid:
             return False, {}
         
-        # Quality score - vectorized
-        avg_atr_20 = self.data['ATR'].iloc[i-20:i].mean()
+        # Quality score
         quality_score = sum([
-            data['ATR'] > 1.3 * avg_atr_20,
-            data['Volume'] > 1.5 * self.data['Volume'].rolling(20).mean().iloc[i],
-            data['RSI'] < 40 and data['RSI_Slope'] < 0,
+            data['RSI'] >= 55 and data['RSI'] <= 65 and data['RSI_Slope'] < 0,
             not self.is_move_exhausted(i, 'SHORT')
         ])
         quality_details = {
-            'atr_expanded': data['ATR'] > 1.3 * avg_atr_20,
-            'volume_high': data['Volume'] > 1.5 * self.data['Volume'].rolling(20).mean().iloc[i],
-            'rsi_crash': data['RSI'] < 40 and data['RSI_Slope'] < 0,
+            'rsi_fading': data['RSI'] >= 55 and data['RSI'] <= 65 and data['RSI_Slope'] < 0,
             'not_exhausted': not self.is_move_exhausted(i, 'SHORT')}
-        
-        pattern_valid = structure_valid and (quality_score >= 1)
+        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
         
         details = {
-            'pattern': 'MOMENTUM_CRASH',
+            'pattern': 'RALLY_FADE',
             'structure_valid': structure_valid,
             'impulse_score': 0,  #just setting to 0 for consistency
             'impulse_details': {},
@@ -1504,7 +1513,7 @@ class SwingTradingStrategyV2:
             'exit_price': last['Close'],
             'exit_reason': 'STILL_HOLDING',
             'pnl_pct': pnl,
-            'bars_held': len(self.data) - start_idx,
+            'bars_held': data_len - start_idx,
             'exit_details': 'Open position'
         }
 

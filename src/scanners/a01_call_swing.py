@@ -122,7 +122,7 @@ def transform_signals(combined_signals_df, filter_date):
     # combined_signals_df is already concatenated, so no need to concat here
     
     # Calculate duration in days between exit_date and date (before formatting)
-    combined_signals_df['duration_days'] = (combined_signals_df['exit_date'] - combined_signals_df['date']).dt.days
+    #combined_signals_df['duration_days'] = (combined_signals_df['exit_date'] - combined_signals_df['date']).dt.days
     
     # Set Date Format
     combined_signals_df['date'] = combined_signals_df['date'].dt.strftime('%Y-%m-%d')
@@ -138,11 +138,11 @@ def transform_signals(combined_signals_df, filter_date):
     combined_signals_df[cols_to_round] = combined_signals_df[cols_to_round].round(2)
 
     # Reorder the Columns (add 'duration_days' to the list)
-    order_cols = ['symbol', 'date', 'entry_price', 'exit_reason', 'regime', 'signal', 'pattern', 
-                'impulse_score','quality_score', 'impulse_details','quality_details', 
-                'pnl_1w_pct', 'pnl_2w_pct', 'pnl_1m_pct', 'exit_date', 'exit_price',  'exit_details', 
-                'duration_days', 'stop_loss', 'target_1', 'target_2', 'pnl_pct', 'rsi', 'rvol', 'bars_held', 
-                'position_size', 'index']
+    order_cols = ['symbol', 'date', 'entry_price', 'bars_held', 'exit_date','exit_reason', 
+                'regime', 'signal', 'pattern', 'impulse_score','quality_score',  'exit_price',  'exit_details',
+                'pnl_1w_pct', 'pnl_2w_pct', 'pnl_1m_pct',  
+                'stop_loss', 'target_1', 'target_2', 'pnl_pct', 'rsi', 'rvol',  
+                'position_size', 'index','impulse_details','quality_details',]
     combined_signals_df = combined_signals_df[order_cols]    
 
     # Filter Data
@@ -199,10 +199,9 @@ if __name__ == "__main__":
         # Export Signal Summary for each Pattern
         #--------------------------------------------------------------
         summary = signals_df.groupby(['regime', 'signal', 'pattern', 'exit_reason']).size().unstack(fill_value=0)
-        print("Exit Reason Summary by Signal and Pattern:")
         summary.to_excel(summary_path, index=True)
-        print(f"Exit summary saved to {summary_path}")
-        
+        print(f"Exit summary Generated!")
+
         #--------------------------------------------------------------
         # Export All Data
         #--------------------------------------------------------------
@@ -212,9 +211,9 @@ if __name__ == "__main__":
 
         order_cols1 = ['symbol', 'date', 'entry_price', 'exit_reason', 'regime', 'signal', 'pattern',
        'impulse_score', 'impulse_details','quality_score', 'quality_details', 'pnl_1w_pct', 'pnl_2w_pct',
-       'pnl_1m_pct', 'exit_date', 'exit_price',  'exit_details',
-       'duration_days', 'stop_loss', 'target_1', 'target_2', 'pnl_pct', 'rsi',
-       'rvol', 'bars_held', 'position_size', 'Open', 'High', 'Low', 'Close', 'Volume',  'EMA3_High',
+       'pnl_1m_pct', 'bars_held',  'exit_date', 'exit_price',  'exit_details',
+       'stop_loss', 'target_1', 'target_2', 'pnl_pct', 'rsi',
+       'rvol', 'position_size', 'Open', 'High', 'Low', 'Close', 'Volume',  'EMA3_High',
        'EMA3_Low', 'EMA3_Close', 'EMA8_High', 'EMA8_Low', 'EMA8_Close',
        'EMA20', 'EMA50', 'EMA200', 'SuperTrend', 'ST_Direction', 'ATR',
        'Trend', 'RSI', 'RSI_Slope', 'RSI_Rising', 'Avg_Volume_20', 'RVol',
@@ -222,7 +221,7 @@ if __name__ == "__main__":
        'Range_OK','index']
         combined_data_df = combined_data_df[order_cols1]
         combined_data_df.to_excel(swing_path2, index=False)
-        
+        print(f"All Data Generated!")
         
     else:
         print("No signals generated for any stock.")
