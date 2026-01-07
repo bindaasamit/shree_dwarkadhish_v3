@@ -429,19 +429,18 @@ class SwingTradingStrategyV2:
                 return False, ''  # This line must be present and properly indented
             
             elif pattern == 'BREAKOUT':
-                range_high = get_range_high(current_idx)
-                if not (data['Close'] > range_high):
-                    return True, 'Close not > 20-bar consolidation high'
-                
-                # Check for two bars: Close[-1] > EMA50[-1] and Close[-2] > EMA50[-2]
-                if current_idx < 2:
-                    return False, ''  # Not enough bars
-                close_minus1 = self.data['Close'].iloc[current_idx-1]
-                ema50_minus1 = self.data['EMA50'].iloc[current_idx-1]
-                close_minus2 = self.data['Close'].iloc[current_idx-2]
-                ema50_minus2 = self.data['EMA50'].iloc[current_idx-2]
-                if not (close_minus1 > ema50_minus1 and close_minus2 > ema50_minus2):
-                    return True, 'Recent closes not above EMA50'
+                # Ignore if within first 5 bars after entry
+                bars_held = current_idx - entry_signal['index']
+                if bars_held > 5:
+                    # Check for two bars: Close[-1] > EMA50[-1] and Close[-2] > EMA50[-2]
+                    if current_idx < 2:
+                        return False, ''  # Not enough bars
+                    close_minus1 = self.data['Close'].iloc[current_idx-1]
+                    ema50_minus1 = self.data['EMA50'].iloc[current_idx-1]
+                    close_minus2 = self.data['Close'].iloc[current_idx-2]
+                    ema50_minus2 = self.data['EMA50'].iloc[current_idx-2]
+                    if not (close_minus1 > ema50_minus1 and close_minus2 > ema50_minus2):
+                        return True, 'Recent closes not above EMA50'
                 
                 return False, ''
             

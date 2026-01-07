@@ -138,11 +138,9 @@ def transform_signals(combined_signals_df, filter_date):
     combined_signals_df[cols_to_round] = combined_signals_df[cols_to_round].round(2)
 
     # Reorder the Columns (add 'duration_days' to the list)
-    order_cols = ['symbol', 'date', 'entry_price', 'bars_held', 'exit_date','exit_reason', 
-                'regime', 'signal', 'pattern', 'impulse_score','quality_score',  'exit_price',  'exit_details',
-                'pnl_1w_pct', 'pnl_2w_pct', 'pnl_1m_pct',  
-                'stop_loss', 'target_1', 'target_2', 'pnl_pct', 'rsi', 'rvol',  
-                'position_size', 'index','impulse_details','quality_details',]
+    order_cols = ['symbol',	'date',	'entry_price', 'regime', 'signal', 'pattern', 'impulse_score', 'quality_score',
+            	'exit_date', 'exit_reason',	'exit_price', 'exit_details', 'bars_held', 'pnl_1w_pct', 'pnl_2w_pct', 'pnl_1m_pct',
+                'stop_loss', 'target_1', 'target_2', 'pnl_pct',	'rsi', 'rvol', 'position_size',	'index', 'impulse_details',	'quality_details']
     combined_signals_df = combined_signals_df[order_cols]    
 
     # Filter Data
