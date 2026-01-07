@@ -507,84 +507,88 @@ class SwingTradingStrategyV2:
         # SHORT positions
         elif signal_type == 'SHORT':
             if pattern == 'MOMENTUM_CRASH':
+                # Mirrored from Long - Momentum Burst
                 if not (data['Close'] < data['EMA200']):
-                    return True, 'Close not < EMA200'
+                    return True, 'Close not below EMA200'
                 ema200_slope = data['EMA200'] - self.data.iloc[current_idx-1]['EMA200']
                 if not (ema200_slope < 0):
-                    return True, 'EMA200 slope not < 0'
+                    return True, 'EMA200 slope not negative'
                 last_swing_low = get_last_swing_low(current_idx)
                 prev_swing_low = get_prev_swing_low(current_idx)
                 if not (last_swing_low < prev_swing_low):
-                    return True, 'Lower low not formed'
+                    return True, 'Last swing low not lower than prev'
                 if not (data[self.fast_close_col] < data[self.slow_close_col]):
-                    return True, 'EMA3 not < EMA8'
+                    return True, 'EMA3 not below EMA8'
                 if not (data['ST_Direction'] == 1):
                     return True, 'SuperTrend not red'
                 prev_swing_low_val = get_prev_swing_low(current_idx)
                 reclaim = self.data['Close'].iloc[current_idx-2:current_idx].max() > prev_swing_low_val
                 if reclaim:
-                    return True, 'Fast reclaim of swing low'
+                    return True, 'Reclaim occurred'
                 return False, ''
             
             elif pattern == 'BREAKDOWN':
+                # Mirrored from Long - Breakout
                 support_level = get_support_level(current_idx)
                 if not (data['Close'] < support_level):
-                    return True, 'Close not < 20-bar support level'
+                    return True, 'Close not below support level'
                 ema50_slope = self.data['EMA50'].diff().iloc[current_idx]
-                if not (data['Close'] < data['EMA50'] and ema50_slope <= 0):
-                    return True, 'HTF bias not bearish'
+                if not (data['Close'] < data['EMA50'] and ema50_slope <= 0):  # Mirrored htf_trend_up to down
+                    return True, 'Not below EMA50 or EMA50 slope not down'
                 last_swing_high = get_last_swing_high(current_idx)
                 prev_swing_high = get_prev_swing_high(current_idx)
-                if not (last_swing_high <= prev_swing_high):
-                    return True, 'Bearish structure not preserved'
+                if not (last_swing_high <= prev_swing_high):  # Mirrored no_lower_high
+                    return True, 'Last swing high not lower than prev'
                 if not (data[self.fast_close_col] < data[self.slow_close_col]):
-                    return True, 'EMA3 not < EMA8'
+                    return True, 'EMA3 not below EMA8'
                 if not (data['ST_Direction'] == 1):
                     return True, 'SuperTrend not red'
                 reclaim = self.data['Close'].iloc[current_idx-2:current_idx].max() > support_level
                 if reclaim:
-                    return True, 'Fast reclaim of support level'
+                    return True, 'Reclaim occurred'
                 return False, ''
             
             elif pattern == 'CONTINUATION_SHORT':
+                # Mirrored from Long - Continuation
                 ema50_slope = self.data['EMA50'].diff().iloc[current_idx]
-                if not (data['Close'] < data['EMA50'] and ema50_slope <= 0):
-                    return True, 'HTF bear trend not intact'
+                if not (data['Close'] < data['EMA50'] and ema50_slope <= 0):  # Mirrored
+                    return True, 'Not below EMA50 or EMA50 slope not down'
                 last_swing_high = get_last_swing_high(current_idx)
                 prev_swing_high = get_prev_swing_high(current_idx)
-                if not (last_swing_high <= prev_swing_high):
-                    return True, 'Bearish structure not preserved'
-                if not (data['Close'] <= data['EMA20']):
-                    return True, 'Price not below dynamic resistance'
+                if not (last_swing_high <= prev_swing_high):  # Mirrored
+                    return True, 'Last swing high not lower than prev'
+                if not (data['Close'] <= data['EMA20']):  # Mirrored
+                    return True, 'Not below EMA20'
                 bar_range = data['High'] - data['Low']
                 range_ma = get_range_ma(current_idx)
-                if not (bar_range < 1.3 * range_ma):
-                    return True, 'Pullback not corrective'
+                if not (bar_range < 1.3 * range_ma):  # Mirrored
+                    return True, 'Range not corrective'
                 impulse_sum = get_impulse_range_sum(current_idx)
                 prev_impulse_sum = get_impulse_range_sum(current_idx - 10)
-                if not (impulse_sum < 1.5 * prev_impulse_sum):
-                    return True, 'Time decay not OK'
+                if not (impulse_sum < 1.5 * prev_impulse_sum):  # Mirrored
+                    return True, 'Impulse not decayed'
                 return False, ''
             
             elif pattern == 'RALLY_FADE':
+                # Mirrored from Long - Pullback
                 ema200_slope = data['EMA200'] - self.data.iloc[current_idx-1]['EMA200']
-                if not (data['Close'] < data['EMA200'] and ema200_slope <= 0):
-                    return True, 'HTF bearish regime not intact'
+                if not (data['Close'] < data['EMA200'] and ema200_slope <= 0):  # Mirrored (using EMA200 as in original, but mirrored logic)
+                    return True, 'Not below EMA200 or EMA200 slope not down'
                 supply_tol = 0.005
                 rally_into_supply = (data['High'] >= data['EMA50'] * (1 - supply_tol)) and (data['Close'] <= data['EMA50'])
-                if not rally_into_supply:
-                    return True, 'Rally not into supply'
+                if not rally_into_supply:  # Kept as is, since mirrored from Long Pullback's EMA50 check
+                    return True, 'Not rallying into supply'
                 last_swing_high = get_last_swing_high(current_idx)
                 prev_swing_high = get_prev_swing_high(current_idx)
-                if not (last_swing_high <= prev_swing_high):
-                    return True, 'Bearish HTF structure not preserved'
+                if not (last_swing_high <= prev_swing_high):  # Mirrored
+                    return True, 'Last swing high not lower than prev'
                 bar_range = data['High'] - data['Low']
                 range_ma = get_range_ma(current_idx)
-                if not (bar_range < 1.3 * range_ma):
-                    return True, 'Rally not corrective'
+                if not (bar_range < 1.3 * range_ma):  # Mirrored
+                    return True, 'Range not corrective'
                 adx = get_adx(current_idx)
-                if not (adx < 25):
-                    return True, 'Regime shift (ADX >= 25)'
+                if not (adx < 25):  # Kept as in original Rally Fade
+                    return True, 'ADX not low'
                 return False, ''
         
         return False, ''
@@ -982,182 +986,256 @@ class SwingTradingStrategyV2:
     # ========================================================================
     
     def detect_pattern_d_momentum_crash_short(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized momentum crash detection."""
+        """Mirrored from Long - Momentum Burst for Short - Momentum Crash."""
         if i < 100:
             return False, {}
         
         data = self.data.iloc[i]
         
-        # Early exits
-        if data['Close'] >= data['EMA200']:
+        ###### Criteria1. Close < EMA200 for at least 2 bars
+        if i < 1:
+            return False, {}  # Safety check, though i >= 100
+        recent_closes = self.data['Close'].iloc[i-1:i+1]
+        recent_emas = self.data['EMA200'].iloc[i-1:i+1]
+        if not all(recent_closes < recent_emas):
             return False, {}
+        
+        ##### Criteria2. Crash must occur within 10 bars of EMA200 acceptance
+        X = 10
+        streak_below = 0
+        for j in range(i, -1, -1):
+            if self.data['Close'].iloc[j] < self.data['EMA200'].iloc[j]:
+                streak_below += 1
+            else:
+                break
+        if streak_below > X:
+            return False, {}
+        
+        ##### Criteria3. Quick structural checks with early exit
         if data[self.fast_close_col] >= data[self.slow_close_col]:
             return False, {}
         
-        ema200_slope = self.data['EMA200'].diff().iloc[i]
-        ema200_slope_down = ema200_slope < 0
+        ##### Criteria 4. EMA200 Trend Confirmation (Normalized Slope < Threshold for downward)
+        price_below_ema200 = True
+        fastema_below_slowema = True
+        #ema200_slope_negative = data['EMA200'] <= self.data.iloc[i-1]['EMA200']
+        #structural_ok = ema200_slope_negative
+
+        ### Mirror: Calculate ATR14
+        atr_period = 14
+        high = self.data['High'].values
+        low = self.data['Low'].values
+        close = self.data['Close'].values
+
+        tr1 = high - low
+        tr2 = np.abs(high - np.roll(close, 1))
+        tr3 = np.abs(low - np.roll(close, 1))
+        tr = np.maximum(tr1, np.maximum(tr2, tr3))
+        tr[0] = tr1[0]
+
+        atr14 = np.zeros_like(tr)
+        atr14[0] = tr[0]
+        alpha = 1 / atr_period
+        for j in range(1, len(tr)):
+            atr14[j] = alpha * tr[j] + (1 - alpha) * atr14[j-1]
+
+        # Calculate normalized EMA200 slope over 5 bars
+        N = 5
+        ema200 = self.data['EMA200'].iloc[i]
+        ema200_shift5 = self.data['EMA200'].iloc[i - N]
+        ema200_slope_norm = (ema200 - ema200_shift5) / atr14[i]
+        threshold = 0.01  # Using 0.15 as the threshold value
+        ema200_trend_ok = ema200_slope_norm < -threshold  # Mirrored for downward
+
+        # Then, update the structural_ok condition to use ema200_trend_ok instead of ema200_slope_negative
+        structural_ok = ema200_trend_ok
         
-        if not ema200_slope_down:
+        if not structural_ok:
             return False, {}
         
-        supertrend_red = data['ST_Direction'] == 1
-        
-        # No reclaim check - vectorized
-        RECLAIM_BARS = 2
-        lows = self.data['Low'].iloc[i-10:i]
-        last_swing_low = lows.min()
-        reclaim_attempts = self.data['Close'].iloc[i-RECLAIM_BARS+1:i+1] > last_swing_low
-        no_fast_reclaim = not reclaim_attempts.any()
-        
-        liquidity_ok = self.check_liquidity(i)
-        
-        structure_valid = ema200_slope_down and supertrend_red and no_fast_reclaim and liquidity_ok
-        
-        if not structure_valid:
-            return False, {}
-        
-        # Quality score - vectorized
+        ##### Impulse Score
         avg_atr_20 = self.data['ATR'].iloc[i-20:i].mean()
-        quality_score = sum([
-            data['ATR'] > 1.3 * avg_atr_20,
-            data['Volume'] > 1.5 * self.data['Volume'].rolling(20).mean().iloc[i],
-            data['RSI'] < 40 and data['RSI_Slope'] < 0,
-            not self.is_move_exhausted(i, 'SHORT')
-        ])
-        quality_details = {
-            'atr_expanded': data['ATR'] > 1.3 * avg_atr_20,
-            'volume_high': data['Volume'] > 1.5 * self.data['Volume'].rolling(20).mean().iloc[i],
-            'rsi_crash': data['RSI'] < 40 and data['RSI_Slope'] < 0,
-            'not_exhausted': not self.is_move_exhausted(i, 'SHORT')}
+        atr_values = self.data['ATR'].iloc[i-2:i+1].values
+        atr_bars_expanded = np.sum(atr_values > 1.2 * avg_atr_20)  # 0-3: number of bars with ATR expansion
+
+        volume_expansion = data['RVol'] > 1.2 and data['Volume'] > self.data.iloc[i-1]['Volume']
+        volume_signal = 1 if volume_expansion else 0  # 1 if volume expands, 0 otherwise
+
+        impulse_score = atr_bars_expanded + volume_signal  # 0-4: total impulse strength
+
+        if impulse_score < 1:  # Require at least minimal impulse (matches original logic)
+            return False, {}
         
-        pattern_valid = structure_valid and (quality_score >= 1)
+        # Generate impulse_details based on impulse_score
+        if impulse_score <= 1:
+            strength = 'weak'
+            description = 'Minimal impulse with limited ATR expansion and no volume confirmation.'
+        elif impulse_score == 2:
+            strength = 'moderate'
+            description = 'Moderate impulse with some ATR expansion and possible volume support.'
+        else:  # 3-4
+            strength = 'strong'
+            description = 'Strong impulse with significant ATR expansion and volume confirmation.'
+        
+        impulse_details = {
+            'atr_expansion_bars': int(atr_bars_expanded),
+            'volume_expansion': bool(volume_signal),
+            'total_score': int(impulse_score),
+            'strength': strength,
+            'description': description
+        }
+        
+        ##### Quality score
+        rsi_in_range = 30 <= data['RSI'] <= 48  # Mirrored for low RSI
+        rsi_slope_negative = data['RSI_Slope'] < 0  # Mirrored for falling
+        cross_recent = False
+        for j in range(max(0, i-25), i):
+            if self.data.iloc[j][self.fast_close_col] >= self.data.iloc[j][self.slow_close_col]:  # Mirrored for bearish cross
+                cross_recent = True
+                break
+    
+        quality_factors = [rsi_in_range, rsi_slope_negative, cross_recent]
+        quality_score = sum(quality_factors)
+        quality_details = {
+            'rsi_in_range': rsi_in_range,
+            'rsi_falling': rsi_slope_negative,  # Mirrored
+            'cross_recent': cross_recent
+        }
+
+        pattern_valid = structural_ok and (quality_score >= self.min_quality_score)
         
         details = {
             'pattern': 'MOMENTUM_CRASH',
-            'structure_valid': structure_valid,
-            'impulse_score': 0,  #just setting to 0 for consistency
-            'impulse_details': {},
+            'structural_ok': structural_ok,
+            'impulse_score': impulse_score,
+            'impulse_details': impulse_details,
             'quality_score': quality_score,
             'quality_details': quality_details,
             'regime': data['Regime']
         }
         
         return pattern_valid, details
-
+   
     def detect_pattern_a_breakdown_short(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized breakdown detection."""
+        """Mirrored from Long - Breakout for Short - Breakdown."""
         if i < 100:
             return False, {}
         
         data = self.data.iloc[i]
         
-        # Pre-calculate support
+        # Pre-calculate reusable values
         SUPPORT_LOOKBACK = 20
         support_level = self.data['Low'].iloc[i-SUPPORT_LOOKBACK:i].min()
         
-        # Early exit
+        # Quick structure checks with early exit
         if data['Close'] >= support_level:
+            return False, {}
+        if data['Close'] >= data['EMA50']:
             return False, {}
         
         close_below_support = True
+        htf_trend_down = True
         
-        # HTF bias
-        ema_htf = data['EMA50']
-        ema_slope = self.data['EMA50'].diff().iloc[i]
-        htf_bias_bearish = (data['Close'] < ema_htf) and (ema_slope <= 0)
+        # Vectorized low checks (mirrored no_lower_high to no_higher_low)
+        POST_BREAKDOWN_BARS = 5
+        recent_low = self.data['Low'].iloc[i-POST_BREAKDOWN_BARS+1:i+1].min()
+        previous_low = self.data['Low'].iloc[i-2*POST_BREAKDOWN_BARS+1:i-POST_BREAKDOWN_BARS+1].min()
+        no_higher_low = recent_low <= previous_low
         
-        if not htf_bias_bearish:
-            return False, {}
-        
-        ema3_below_ema8 = data[self.fast_close_col] < data[self.slow_close_col]
-        supertrend_red = data['ST_Direction'] == 1
-        
-        # No reclaim check - vectorized
-        RECLAIM_BARS = 2
-        reclaim_attempts = self.data['Close'].iloc[i-RECLAIM_BARS+1:i+1] > support_level
-        no_fast_reclaim = not reclaim_attempts.any()
+        # ADX check
+        adx_result = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=14)
+        adx = adx_result.iloc[i]['ADX_14'] if adx_result is not None else 0
+        regime_allows_expansion = adx > 18
         
         liquidity_ok = self.check_liquidity(i)
         
-        structure_valid = close_below_support and htf_bias_bearish and ema3_below_ema8 and supertrend_red and no_fast_reclaim and liquidity_ok
+        structure_valid = close_below_support and htf_trend_down and no_higher_low and regime_allows_expansion and liquidity_ok
         
         if not structure_valid:
             return False, {}
         
-        # Quality score
+        # Quality score - vectorized (mirrored)
+        avg_atr_20 = self.data['ATR'].iloc[i-20:i].mean()
         quality_score = sum([
-            data['RSI'] < 45,
-            data['Close'] < self.data['Low'].shift(1).iloc[i],
-            not self.is_move_exhausted(i, 'SHORT')
+            data['ATR'] > 1.2 * avg_atr_20,
+            data['RVol'] > 1.2,
+            data['RSI'] < 45 and data['RSI_Slope'] < 0,  # Mirrored for low/falling RSI
+            data['Close'] < support_level,
+            not self.has_recent_trap(i, 'SHORT', lookback=5)
         ])
         
         quality_details = {
-            'rsi_low': data['RSI'] < 45,
-            'close_lower_than_prev': data['Close'] < self.data['Low'].shift(1).iloc[i],
-            'not_exhausted': not self.is_move_exhausted(i, 'SHORT')}
+            'atr_expanded': data['ATR'] > 1.2 * avg_atr_20,
+            'rvol_high': data['RVol'] > 1.2,
+            'rsi_low_falling': data['RSI'] < 45 and data['RSI_Slope'] < 0,  # Mirrored
+            'close_below_support': data['Close'] < support_level,
+            'no_trap': not self.has_recent_trap(i, 'SHORT', lookback=5)
+        }
 
-        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
-        
         details = {
             'pattern': 'BREAKDOWN',
             'structure_valid': structure_valid,
-            'impulse_score': 0,  #just setting to 0 for consistency
+            'impulse_score': 0,
             'impulse_details': {},
             'quality_score': quality_score,
             'quality_details': quality_details,
             'regime': data['Regime']
         }
+        
+        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
         
         return pattern_valid, details
 
     def detect_pattern_c_continuation_short(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized continuation short detection."""
+        """Mirrored from Long - Continuation for Short - Continuation Short."""
         if i < 100:
             return False, {}
         
         data = self.data.iloc[i]
         
-        # Early exit
+        # Quick early exits (mirrored)
         if data['Close'] > data['EMA50']:
             return False, {}
         if data['Close'] > data['EMA20']:
             return False, {}
         
-        ema_slope = self.data['EMA50'].diff().iloc[i]
-        htf_bear_trend = (data['Close'] < data['EMA50']) and (ema_slope <= 0)
-        
-        if not htf_bear_trend:
+        EMA_LEN = 50
+        ema = self.data['Close'].ewm(span=EMA_LEN, adjust=False).mean()
+        ema_slope = ema.diff().iloc[i]
+        htf_trend_intact = (data['Close'] < ema.iloc[i]) and (ema_slope < 0)  # Mirrored
+    
+        if not htf_trend_intact:
             return False, {}
         
-        price_below_dynamic_resistance = data['Close'] <= data['EMA20']
-        
-        bar_range = data['High'] - data['Low']
+        # Range check (same)
+        range_now = data['High'] - data['Low']
         range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
-        pullback_is_corrective = bar_range < 1.3 * range_ma
+        pullback_is_corrective = range_now < 1.2 * range_ma
+        
+        dynamic_resistance_held = data['Close'] <= data['EMA20']  # Mirrored
         
         IMPULSE_BARS = 10
         impulse_range = (self.data['High'] - self.data['Low']).rolling(IMPULSE_BARS).sum()
         time_decay_ok = impulse_range.iloc[i] < 1.5 * impulse_range.iloc[i-IMPULSE_BARS]
         
-        liquidity_ok = self.check_liquidity(i)
-        
-        structure_valid = htf_bear_trend and price_below_dynamic_resistance and pullback_is_corrective and time_decay_ok and liquidity_ok
+        structure_valid = htf_trend_intact and pullback_is_corrective and dynamic_resistance_held and time_decay_ok
         
         if not structure_valid:
             return False, {}
         
-        # Quality score
+        # Quality score (mirrored)
         quality_score = sum([
-            data['RSI'] < 50,
-            data['Close'] < self.data['Low'].shift(1).iloc[i],
+            data['RSI'] < 50 and data['RSI_Slope'] < 0,  # Mirrored
+            data['Close'] < self.data['Low'].shift(1).iloc[i],  # Mirrored
             not self.is_move_exhausted(i, 'SHORT')
         ])
-        
+
         quality_details = {
-            'rsi_low': data['RSI'] < 50,
-            'close_lower_than_prev': data['Close'] < self.data['Low'].shift(1).iloc[i],
+            'rsi_low_falling': data['RSI'] < 50 and data['RSI_Slope'] < 0,  # Mirrored
+            'close_lower_than_prev': data['Close'] < self.data['Low'].shift(1).iloc[i],  # Mirrored
             'not_exhausted': not self.is_move_exhausted(i, 'SHORT')
         }
+        
         pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
         
         details = {
@@ -1171,68 +1249,83 @@ class SwingTradingStrategyV2:
         }
         
         return pattern_valid, details
-    
+
     def detect_pattern_b_rally_short(self, i: int) -> Tuple[bool, Dict]:
-        """Optimized rally fade detection."""
+        """Mirrored from Long - Pullback for Short - Rally Fade."""
         if i < 100:
             return False, {}
         
         data = self.data.iloc[i]
         
-        # Early exit
-        if data['Close'] >= data['EMA200']:
+        # Early exit checks (mirrored)
+        if data['Close'] > data['EMA50']:
             return False, {}
         
-        ema200_slope = self.data['EMA200'].diff().iloc[i]
-        htf_bearish_regime = (data['Close'] < data['EMA200']) and (ema200_slope <= 0)
+        EMA_HTF = 50
+        ema_htf = self.data['Close'].ewm(span=EMA_HTF, adjust=False).mean().iloc[i]
+        ema_slope = self.data['Close'].ewm(span=EMA_HTF, adjust=False).mean().diff().iloc[i]
+        htf_trend_intact = (data['Close'] < ema_htf) and (ema_slope < 0)  # Mirrored
         
-        if not htf_bearish_regime:
+        if not htf_trend_intact:
             return False, {}
         
-        # Rally into supply
-        ema_supply = data['EMA50']
-        SUPPLY_TOL = 0.005
-        rally_into_supply = (data['High'] >= ema_supply * (1 - SUPPLY_TOL)) and (data['Close'] <= ema_supply)
+        rally_depth_ok = data['Close'] <= ema_htf  # Mirrored
         
-        # Range check
-        bar_range = data['High'] - data['Low']
+        # Swing high check - optimized (mirrored higher_low to lower_high)
+        SWING_LOOKBACK = 3
+        highs = self.data['High'].values
+        swing_highs = []
+        for j in range(SWING_LOOKBACK, len(highs) - 1):
+            if highs[j] > highs[j-1] and highs[j] > highs[j+1]:
+                swing_highs.append((j, highs[j]))
+        
+        lower_high_preserved = True
+        if len(swing_highs) >= 2:
+            lower_high_preserved = swing_highs[-1][1] <= swing_highs[-2][1]  # Mirrored
+        
+        # Rally characteristics (mirrored pullback_is_corrective)
+        range_now = data['High'] - data['Low']
         range_ma = (self.data['High'] - self.data['Low']).rolling(10).mean().iloc[i]
-        rally_is_corrective = bar_range < 1.3 * range_ma
+        rally_is_corrective = range_now < 1.3 * range_ma
         
-        # ADX check
-        adx_result = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=14)
-        adx = adx_result.iloc[i]['ADX_14'] if adx_result is not None else 0
-        no_regime_shift = adx < 25
+        IMPULSE_BARS = 10
+        impulse_range = (self.data['High'] - self.data['Low']).rolling(IMPULSE_BARS).sum()
+        time_decay_ok = impulse_range.iloc[i] < 1.5 * impulse_range.iloc[i-IMPULSE_BARS]
         
         liquidity_ok = self.check_liquidity(i)
         
-        structure_valid = htf_bearish_regime and rally_into_supply and rally_is_corrective and no_regime_shift and liquidity_ok
+        structure_valid = htf_trend_intact and rally_depth_ok and lower_high_preserved and rally_is_corrective and time_decay_ok and liquidity_ok
         
         if not structure_valid:
             return False, {}
         
-        # Quality score
+        # Quality score (mirrored)
         quality_score = sum([
-            data['RSI'] >= 55 and data['RSI'] <= 65 and data['RSI_Slope'] < 0,
+            data['RSI'] <= 55 and data['RSI_Slope'] < 0,  # Mirrored
+            data['Close'] < self.data['Low'].shift(1).iloc[i],  # Mirrored
             not self.is_move_exhausted(i, 'SHORT')
         ])
-        quality_details = {
-            'rsi_fading': data['RSI'] >= 55 and data['RSI'] <= 65 and data['RSI_Slope'] < 0,
-            'not_exhausted': not self.is_move_exhausted(i, 'SHORT')}
-        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
         
+        quality_details = {
+            'rsi_low_falling': data['RSI'] <= 55 and data['RSI_Slope'] < 0,  # Mirrored
+            'close_lower_than_prev': data['Close'] < self.data['Low'].shift(1).iloc[i],  # Mirrored
+            'not_exhausted': not self.is_move_exhausted(i, 'SHORT')
+        }
+
         details = {
             'pattern': 'RALLY_FADE',
             'structure_valid': structure_valid,
-            'impulse_score': 0,  #just setting to 0 for consistency
+            'impulse_score': 0,
             'impulse_details': {},
             'quality_score': quality_score,
             'quality_details': quality_details,
             'regime': data['Regime']
         }
         
+        pattern_valid = structure_valid and (quality_score >= self.min_quality_score)
+        
         return pattern_valid, details
-   
+    
     # ========================================================================
     #                         SIGNAL GENERATION - OPTIMIZED
     # ========================================================================
@@ -1518,6 +1611,7 @@ class SwingTradingStrategyV2:
         last = self.data.iloc[-1]
         pnl = ((last['Close'] - entry_price) / entry_price * 100
             if signal_type == 'LONG'
+           
             else (entry_price - last['Close']) / entry_price * 100)
         
         return {
@@ -1527,7 +1621,7 @@ class SwingTradingStrategyV2:
             'pnl_pct': pnl,
             'bars_held': data_len - start_idx,
             'exit_details': 'Open position'
-    }
+        }
 
     def check_profit_protection(self, entry_signal: Dict, current_idx: int, profit_locked: bool, signal_type: str, entry_price: float, risk: float, data: pd.Series) -> Tuple[bool, Dict]:
         """
