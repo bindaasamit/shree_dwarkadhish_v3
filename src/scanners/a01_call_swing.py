@@ -156,7 +156,7 @@ def transform_signals(combined_signals_df, filter_date):
 #                                MAIN WORKFLOW
 # ============================================================================
 if __name__ == "__main__":    
-    sector ='test'  # 'test' / 'movers' / 'fno_sects' / 'cash'
+    sector ='fno_sects'  # 'test' / 'movers' / 'fno_sects' / 'cash'
     start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date

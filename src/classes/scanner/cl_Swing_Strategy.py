@@ -1554,9 +1554,16 @@ class SwingTradingStrategyV2:
                     return exit_info
         
             # 5. EMA cross (last resort)
-            if bars_held >= 3 and not profit_locked:
+            if bars_held >= 3 and not profit_locked:  # Keep the >=3 check for safety
                 if signal_type == 'LONG':
-                    if data[self.fast_close_col] < data[self.slow_close_col] and close_vals[i] < entry_price:
+                    min_bars = 3 if pattern == 'MOMENTUM_BURST' else 5
+                    ema_cross_down = (
+                        bars_held >= min_bars
+                        and data[self.fast_close_col] < data[self.slow_close_col]  # EMA3 < EMA8 at i
+                        and self.data.iloc[i-1][self.fast_close_col] < self.data.iloc[i-1][self.slow_close_col]  # Confirmation at i-1
+                        and close_vals[i] < entry_price  # Trade underwater
+                    )
+                    if ema_cross_down:
                         pnl = ((close_vals[i] - entry_price) / entry_price) * 100
                         return {
                             'exit_date': data.name,
@@ -1566,8 +1573,15 @@ class SwingTradingStrategyV2:
                             'bars_held': bars_held,
                             'exit_details': 'EMA cross - last resort'
                         }
-                else:
-                    if data[self.fast_close_col] > data[self.slow_close_col] and close_vals[i] > entry_price:
+                else:  # SHORT
+                    min_bars = 3 if pattern == 'MOMENTUM_CRASH' else 5
+                    ema_cross_up = (
+                        bars_held >= min_bars
+                        and data[self.fast_close_col] > data[self.slow_close_col]
+                        and self.data.iloc[i-1][self.fast_close_col] > self.data.iloc[i-1][self.slow_close_col]
+                        and close_vals[i] > entry_price
+                    )
+                    if ema_cross_up:
                         pnl = ((entry_price - close_vals[i]) / entry_price) * 100
                         return {
                             'exit_date': data.name,
