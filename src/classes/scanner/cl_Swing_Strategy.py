@@ -1412,7 +1412,7 @@ class SwingTradingStrategyV2:
                             'bars_held': bars_held,
                             'exit_details': 'Volatility expansion failed'
                         }
-            
+        
             # 2. Pattern failure
             failed, reason = self.check_pattern_failure(entry_signal, i)
             if failed:
@@ -1447,39 +1447,19 @@ class SwingTradingStrategyV2:
                     'exit_details': f'Dynamic stop at {exit_price:.2f}'
                 }
             
-            # 4. Profit protection
-            if not profit_locked:
-                if signal_type == 'LONG' and high_vals[i] >= entry_price + risk:
-                    profit_locked = True
-                elif signal_type == 'SHORT' and low_vals[i] <= entry_price - risk:
-                    profit_locked = True
-            
-            if profit_locked:
-                if signal_type == 'LONG':
-                    trail_stop = max(entry_price + 0.5 * risk, data['EMA20'])
-                    if close_vals[i] < trail_stop:
-                        pnl = ((close_vals[i] - entry_price) / entry_price) * 100
-                        return {
-                            'exit_date': data.name,
-                            'exit_price': close_vals[i],
-                            'exit_reason': 'PROFIT_PROTECT',
-                            'pnl_pct': pnl,
-                            'bars_held': bars_held,
-                            'exit_details': 'Profit locked, EMA20 lost'
-                        }
+            # 4. Profit protection (now using the separate function)
+            should_exit, exit_info = self.check_profit_protection(entry_signal, i, profit_locked, signal_type, entry_price, risk, data)
+            if should_exit:
+                if exit_info.get('exit_reason') == 'PARTIAL_PROFIT':
+                    # Record partial exit alert, but continue the trade
+                    if 'partial_exits' not in entry_signal:
+                        entry_signal['partial_exits'] = []
+                    entry_signal['partial_exits'].append(exit_info)
+                    continue  # Don't exit fully; trade continues
                 else:
-                    trail_stop = min(entry_price - 0.5 * risk, data['EMA20'])
-                    if close_vals[i] > trail_stop:
-                        pnl = ((entry_price - close_vals[i]) / entry_price) * 100
-                        return {
-                            'exit_date': data.name,
-                            'exit_price': close_vals[i],
-                            'exit_reason': 'PROFIT_PROTECT',
-                            'pnl_pct': pnl,
-                            'bars_held': bars_held,
-                            'exit_details': 'Profit locked, EMA20 lost'
-                        }
-            
+                    # Full exit for other reasons
+                    return exit_info
+        
             # 5. EMA cross (last resort)
             if bars_held >= 3 and not profit_locked:
                 if signal_type == 'LONG':
@@ -1504,7 +1484,7 @@ class SwingTradingStrategyV2:
                             'bars_held': bars_held,
                             'exit_details': 'EMA cross - last resort'
                         }
-            
+        
             # 6. Time exit (conditional)
             if signal_type == 'LONG' and bars_held >= 10:
                 risk_calc = entry_price - stop_loss
@@ -1522,7 +1502,7 @@ class SwingTradingStrategyV2:
                         'bars_held': bars_held,
                         'exit_details': f'Time exit: R={R:.2f}, low progress'
                     }
-            
+        
             elif signal_type == 'SHORT' and bars_held >= 30:
                 pnl = ((entry_price - close_vals[i]) / entry_price) * 100
                 return {
@@ -1533,12 +1513,12 @@ class SwingTradingStrategyV2:
                     'bars_held': bars_held,
                     'exit_details': 'Max 30 bars held'
                 }
-        
+    
         # Still holding
         last = self.data.iloc[-1]
         pnl = ((last['Close'] - entry_price) / entry_price * 100
-              if signal_type == 'LONG'
-              else (entry_price - last['Close']) / entry_price * 100)
+            if signal_type == 'LONG'
+            else (entry_price - last['Close']) / entry_price * 100)
         
         return {
             'exit_date': last.name,
@@ -1547,7 +1527,106 @@ class SwingTradingStrategyV2:
             'pnl_pct': pnl,
             'bars_held': data_len - start_idx,
             'exit_details': 'Open position'
-        }
+    }
+
+    def check_profit_protection(self, entry_signal: Dict, current_idx: int, profit_locked: bool, signal_type: str, entry_price: float, risk: float, data: pd.Series) -> Tuple[bool, Dict]:
+        """
+        Check for profit protection conditions, including partial exits and trailing stops.
+        Returns (should_exit, exit_dict) where exit_dict is empty if no exit.
+        For partial profits, returns (True, exit_dict) with 'PARTIAL_PROFIT' reason to alert booking.
+        """
+        exit_dict = {}
+        
+        # Initialize partial exit tracking if not already done
+        if 'partial_1_done' not in entry_signal:
+            entry_signal['partial_1_done'] = False
+        
+        # Layer1: Early Partial Profits - Check for initial profit lock (+1R or +1ATR)
+        if not profit_locked:
+            if signal_type == 'LONG':
+                if data['High'] >= entry_price + risk or data['High'] >= entry_price + data['ATR']:
+                    profit_locked = True
+            elif signal_type == 'SHORT':
+                if data['Low'] <= entry_price - risk or data['Low'] <= entry_price - data['ATR']:
+                    profit_locked = True
+        
+        if profit_locked:
+            # Partial exit at +1R / +1ATR if not already done - ALERT HERE
+            if not entry_signal['partial_1_done']:
+                if signal_type == 'LONG':
+                    if data['Close'] >= entry_price + risk or data['Close'] >= entry_price + data['ATR']:
+                        entry_signal['partial_1_done'] = True
+                        pnl_partial = ((data['Close'] - entry_price) / entry_price) * 100  # PnL for partial (assuming 50% position)
+                        exit_dict = {
+                            'exit_date': data.name,
+                            'exit_price': data['Close'],
+                            'exit_reason': 'PARTIAL_PROFIT',
+                            'pnl_pct': pnl_partial,
+                            'bars_held': current_idx - entry_signal['index'],
+                            'exit_details': 'Layer1: Partial profit booked at +1R/+1ATR'
+                        }
+                        return True, exit_dict  # Alert to book partial, but trade continues
+                elif signal_type == 'SHORT':
+                    if data['Close'] <= entry_price - risk or data['Close'] <= entry_price - data['ATR']:
+                        entry_signal['partial_1_done'] = True
+                        pnl_partial = ((entry_price - data['Close']) / entry_price) * 100  # PnL for partial
+                        exit_dict = {
+                            'exit_date': data.name,
+                            'exit_price': data['Close'],
+                            'exit_reason': 'PARTIAL_PROFIT',
+                            'pnl_pct': pnl_partial,
+                            'bars_held': current_idx - entry_signal['index'],
+                            'exit_details': 'Layer1: Partial profit booked at +1R/+1ATR'
+                        }
+                        return True, exit_dict  # Alert to book partial, but trade continues
+            
+            # Layer2: Check for Momentum Slowdown/Signal Deterioration (EMA20 flat/RSI rollover/range contract)
+            ema20_flat = abs(data['EMA20'] - self.data.iloc[current_idx-1]['EMA20']) < 0.001 * data['ATR']
+            rsi_rollover = (signal_type == 'LONG' and data['RSI_Slope'] < 0) or (signal_type == 'SHORT' and data['RSI_Slope'] > 0)
+            range_contract = (data['High'] - data['Low']) < 0.8 * data['ATR']
+            
+            if ema20_flat or rsi_rollover or range_contract:
+                pnl = ((data['Close'] - entry_price) / entry_price * 100 if signal_type == 'LONG' 
+                    else (entry_price - data['Close']) / entry_price * 100)
+                exit_dict = {
+                    'exit_date': data.name,
+                    'exit_price': data['Close'],
+                    'exit_reason': 'PROTECT PROFITS-SIGNAL-GETTING-WEAK',
+                    'pnl_pct': pnl,
+                    'bars_held': current_idx - entry_signal['index'],
+                    'exit_details': 'Layer2: EMA20 flat/RSI rollover/range contract'
+                }
+                return True, exit_dict
+            
+            # Final exit: Trail to break-even, then EMA20 loss
+            if signal_type == 'LONG':
+                trail_stop = max(entry_price, data['EMA20'])  # Trail to BE, then EMA20
+                if data['Close'] < trail_stop:
+                    pnl = ((data['Close'] - entry_price) / entry_price) * 100
+                    exit_dict = {
+                        'exit_date': data.name,
+                        'exit_price': data['Close'],
+                        'exit_reason': 'PROFIT_PROTECT',
+                        'pnl_pct': pnl,
+                        'bars_held': current_idx - entry_signal['index'],
+                        'exit_details': 'Layer3: Profit locked, EMA20 lost'
+                    }
+                    return True, exit_dict
+            elif signal_type == 'SHORT':
+                trail_stop = min(entry_price, data['EMA20'])  # Trail to BE, then EMA20
+                if data['Close'] > trail_stop:
+                    pnl = ((entry_price - data['Close']) / entry_price) * 100
+                    exit_dict = {
+                        'exit_date': data.name,
+                        'exit_price': data['Close'],
+                        'exit_reason': 'PROFIT_PROTECT',
+                        'pnl_pct': pnl,
+                        'bars_held': current_idx - entry_signal['index'],
+                        'exit_details': 'Layer3: Profit locked, EMA20 lost'
+                    }
+                    return True, exit_dict
+        
+        return False, exit_dict
 
     # ========================================================================
     #                         MAIN EXECUTION - OPTIMIZED
