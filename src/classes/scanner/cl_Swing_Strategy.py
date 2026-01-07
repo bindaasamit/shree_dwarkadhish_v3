@@ -634,6 +634,7 @@ class SwingTradingStrategyV2:
     # ========================================================================
     #                         PATTERN DETECTION (LONG) - OPTIMIZED
     # ========================================================================
+
     
     def detect_pattern_d_momentum_burst(self, i: int) -> Tuple[bool, Dict]:
         """Optimized momentum burst detection."""
@@ -1322,6 +1323,16 @@ class SwingTradingStrategyV2:
                 target_1 = data['Close'] - 2 * data['ATR']
                 target_2 = data['Close'] - 3 * data['ATR']
             
+            # Calculate risk-reward ratios
+            risk = abs(data['Close'] - stop_loss)
+            reward_1 = abs(target_1 - data['Close'])
+            reward_2 = abs(target_2 - data['Close'])
+            rr_1 = reward_1 / risk if risk != 0 else 0
+            rr_2 = reward_2 / risk if risk != 0 else 0
+
+            # Then, in the signal dict, add:
+            
+
             signal = {
                 'symbol': self.symbol,
                 'date': data.name,
@@ -1336,6 +1347,8 @@ class SwingTradingStrategyV2:
                 'stop_loss': stop_loss,
                 'target_1': target_1,
                 'target_2': target_2,
+                'rr_1': round(rr_1, 2), #indicates the potenttial reward for hitting the first target.
+                'rr_2': round(rr_2, 2), #indicates the potenttial reward for hitting the second target.
                 'position_size': position_size,
                 'rsi': data['RSI'],
                 'rvol': data['RVol'],

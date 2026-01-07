@@ -138,7 +138,7 @@ def transform_signals(combined_signals_df, filter_date):
     combined_signals_df[cols_to_round] = combined_signals_df[cols_to_round].round(2)
 
     # Reorder the Columns (add 'duration_days' to the list)
-    order_cols = ['symbol',	'date',	'entry_price', 'regime', 'signal', 'pattern', 'impulse_score', 'quality_score',
+    order_cols = ['symbol',	'date',	'entry_price', 'regime', 'signal', 'pattern', 'impulse_score', 'quality_score', 'rr_1', 'rr_2',
             	'exit_date', 'exit_reason',	'exit_price', 'exit_details', 'bars_held', 'pnl_1w_pct', 'pnl_2w_pct', 'pnl_1m_pct',
                 'stop_loss', 'target_1', 'target_2', 'pnl_pct',	'rsi', 'rvol', 'position_size',	'index', 'impulse_details',	'quality_details']
     combined_signals_df = combined_signals_df[order_cols]    
@@ -156,7 +156,7 @@ def transform_signals(combined_signals_df, filter_date):
 #                                MAIN WORKFLOW
 # ============================================================================
 if __name__ == "__main__":    
-    sector ='movers'  # 'test' / 'movers' / 'fno_sects' / 'cash'
+    sector ='test'  # 'test' / 'movers' / 'fno_sects' / 'cash'
     start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
@@ -185,9 +185,9 @@ if __name__ == "__main__":
         signals_filt_df['date'] = pd.to_datetime(signals_filt_df['date']).dt.strftime('%Y-%m-%d')
         signals_filt_df.to_excel(swing_path1, index=False)
         sheets = {
-            'TREND_LONG': (signals_filt_df['regime'] == 'TRENDING') & (signals_filt_df['signal'] == 'LONG'),
-            'TREND_SHORT': (signals_filt_df['regime'] == 'TRENDING') & (signals_filt_df['signal'] == 'SHORT'),
-            'CONSOLIDATING': signals_filt_df['regime'] == 'CONSOLIDATING'}
+            'TREND_LONG' : (signals_filt_df['regime'] == 'TRENDING') & (signals_filt_df['signal'] == 'LONG')
+           ,'TREND_SHORT': (signals_filt_df['regime'] == 'TRENDING') & (signals_filt_df['signal'] == 'SHORT')}
+            #,'CONSOLIDATING': signals_filt_df['regime'] == 'CONSOLIDATING'}
         with pd.ExcelWriter(swing_path1) as writer:
             for sheet_name, mask in sheets.items():
                 signals_filt_df[mask].to_excel(writer, sheet_name=sheet_name, index=False)
@@ -196,7 +196,9 @@ if __name__ == "__main__":
         #--------------------------------------------------------------
         # Export Signal Summary for each Pattern
         #--------------------------------------------------------------
-        summary = signals_df.groupby(['regime', 'signal', 'pattern', 'exit_reason']).size().unstack(fill_value=0)
+        signals_filt_df = signals_df[signals_df['regime'] == 'TRENDING']
+        #summary = signals_df.groupby(['regime', 'signal', 'pattern', 'exit_reason']).size().unstack(fill_value=0)
+        summary = signals_filt_df.groupby(['signal','pattern', 'exit_reason']).size().unstack(fill_value=0)
         summary.to_excel(summary_path, index=True)
         print(f"Exit summary Generated!")
 
@@ -206,10 +208,11 @@ if __name__ == "__main__":
         data_df = pd.concat(all_data_df, ignore_index=True)
         data_df['date'] = pd.to_datetime(data_df['date']).dt.strftime('%Y-%m-%d')
         combined_data_df = data_df.merge(signals_filt_df, on=['symbol', 'date'], how='left')
+        combined_filt_data_df = combined_data_df[combined_data_df['regime'] == 'TRENDING']
 
         order_cols1 = ['symbol', 'date', 'entry_price', 'exit_reason', 'regime', 'signal', 'pattern',
        'impulse_score', 'impulse_details','quality_score', 'quality_details', 'pnl_1w_pct', 'pnl_2w_pct',
-       'pnl_1m_pct', 'bars_held',  'exit_date', 'exit_price',  'exit_details',
+       'pnl_1m_pct', 'bars_held',  'exit_date', 'exit_price',  'exit_details', 'rr_1', 'rr_2',
        'stop_loss', 'target_1', 'target_2', 'pnl_pct', 'rsi',
        'rvol', 'position_size', 'Open', 'High', 'Low', 'Close', 'Volume',  'EMA3_High',
        'EMA3_Low', 'EMA3_Close', 'EMA8_High', 'EMA8_Low', 'EMA8_Close',
@@ -217,8 +220,8 @@ if __name__ == "__main__":
        'Trend', 'RSI', 'RSI_Slope', 'RSI_Rising', 'Avg_Volume_20', 'RVol',
        'BBW', 'ER', 'BBW_Expanding', 'Regime', 'True_Range', 'Avg_TR',
        'Range_OK','index']
-        combined_data_df = combined_data_df[order_cols1]
-        combined_data_df.to_excel(swing_path2, index=False)
+        combined_filt_data_df = combined_filt_data_df[order_cols1]
+        combined_filt_data_df.to_excel(swing_path2, index=False)
         print(f"All Data Generated!")
         
     else:
