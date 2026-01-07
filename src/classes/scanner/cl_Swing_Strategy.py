@@ -409,34 +409,17 @@ class SwingTradingStrategyV2:
         # LONG positions
         if signal_type == 'LONG':
             if pattern == 'MOMENTUM_BURST':
-                if not (data['Close'] > data['EMA200']):
-                    #return True, 'Price not > EMA200'
-                    return True, 'Price not > EMA200'
-                if not (data[self.fast_close_col] > data[self.slow_close_col]):
-                    #return True, 'EMA3 not > EMA8'
-                    return True, 'EMA3 not > EMA8'
-                ema200_slope = data['EMA200'] - self.data.iloc[current_idx-1]['EMA200']
-                if not (ema200_slope >= 0):
-                    #return True, 'EMA200 slope not >= 0'
-                    return True, 'EMA200 slope not >= 0'
-                # New condition 1: Close > EMA200 for at least 2 bars
-                if current_idx < 1:
-                    return False, ''  # Cannot check prior bar
-                recent_closes = self.data['Close'].iloc[current_idx-1:current_idx+1]
-                recent_emas = self.data['EMA200'].iloc[current_idx-1:current_idx+1]
-                if not all(recent_closes > recent_emas):
-                    return True, 'Price not > EMA200 for at least 2 bars'
-                # New condition 2: Price has NOT closed above EMA200 for >=2 bars before the burst candle
-                # (Mirrored from entry: ensure no prolonged prior streak during holding)
-                streak_above = 0
-                for j in range(current_idx-1, -1, -1):
-                    if self.data['Close'].iloc[j] > self.data['EMA200'].iloc[j]:
-                        streak_above += 1
-                    else:
-                        break
-                if streak_above >= 2:
-                    return True, 'Price closed above EMA200 for >=2 bars before current bar'
-                return False, ''
+                if data[self.fast_close_col] < data[self.slow_close_col]:
+                    return True, 'EMA3 < EMA8'
+                if current_idx < 2:
+                    return False, ''  # Not enough bars
+                close_minus1 = self.data['Close'].iloc[current_idx-1]
+                ema200_minus1 = self.data['EMA200'].iloc[current_idx-1]
+                close_minus2 = self.data['Close'].iloc[current_idx-2]
+                ema200_minus2 = self.data['EMA200'].iloc[current_idx-2]
+                if not (close_minus1 > ema200_minus1 and close_minus2 > ema200_minus2):
+                    return True, 'Recent closes not above EMA200'
+                return False, 
             
             elif pattern == 'BREAKOUT':
                 range_high = get_range_high(current_idx)
@@ -840,7 +823,7 @@ class SwingTradingStrategyV2:
         
         data = self.data.iloc[i]
         
-        # Enhanced entry criteria: Close > EMA200 for at least 2 bars
+        ###### Criteria1. Close > EMA200 for at least 2 bars
         if i < 1:
             return False, {}  # Safety check, though i >= 100
         recent_closes = self.data['Close'].iloc[i-1:i+1]
@@ -848,30 +831,61 @@ class SwingTradingStrategyV2:
         if not all(recent_closes > recent_emas):
             return False, {}
         
-        # Additional criteria: Price has NOT closed above EMA200 for >=2 bars before the burst candle
+        ##### Criteria2. Burst must occur within 10 bars of EMA200 acceptance
+        X = 10
         streak_above = 0
-        for j in range(i-1, -1, -1):
+        for j in range(i, -1, -1):
             if self.data['Close'].iloc[j] > self.data['EMA200'].iloc[j]:
                 streak_above += 1
             else:
                 break
-        if streak_above >= 2:
+        if streak_above > X:
             return False, {}
         
-        # Quick structural checks with early exit
+        ##### Criteria3. Quick structural checks with early exit
         if data[self.fast_close_col] <= data[self.slow_close_col]:
             return False, {}
         
+        ##### Criteria 4. EMA200 Trend Confirmation (Normalized Slope > Threshold)
         price_above_ema200 = True
         fastema_above_slowema = True
-        ema200_slope_positive = data['EMA200'] >= self.data.iloc[i-1]['EMA200']
-        
-        structural_ok = ema200_slope_positive
+        #ema200_slope_positive = data['EMA200'] >= self.data.iloc[i-1]['EMA200']
+        #structural_ok = ema200_slope_positive
+
+        ### Replace the EMA200 slop criteria
+        # Calculate ATR14
+        atr_period = 14
+        high = self.data['High'].values
+        low = self.data['Low'].values
+        close = self.data['Close'].values
+
+        tr1 = high - low
+        tr2 = np.abs(high - np.roll(close, 1))
+        tr3 = np.abs(low - np.roll(close, 1))
+        tr = np.maximum(tr1, np.maximum(tr2, tr3))
+        tr[0] = tr1[0]
+
+        atr14 = np.zeros_like(tr)
+        atr14[0] = tr[0]
+        alpha = 1 / atr_period
+        for j in range(1, len(tr)):
+            atr14[j] = alpha * tr[j] + (1 - alpha) * atr14[j-1]
+
+        # Calculate normalized EMA200 slope over 5 bars
+        N = 5
+        ema200 = self.data['EMA200'].iloc[i]
+        ema200_shift5 = self.data['EMA200'].iloc[i - N]
+        ema200_slope_norm = (ema200 - ema200_shift5) / atr14[i]
+        threshold = 0.01  # Using 0.15 as the threshold value
+        ema200_trend_ok = ema200_slope_norm > threshold
+
+        # Then, update the structural_ok condition to use ema200_trend_ok instead of ema200_slope_positive
+        structural_ok = ema200_trend_ok
         
         if not structural_ok:
             return False, {}
         
-        # Impulse Score
+        ##### Impulse Score
         avg_atr_20 = self.data['ATR'].iloc[i-20:i].mean()
         atr_values = self.data['ATR'].iloc[i-2:i+1].values
         atr_bars_expanded = np.sum(atr_values > 1.2 * avg_atr_20)  # 0-3: number of bars with ATR expansion
@@ -903,7 +917,7 @@ class SwingTradingStrategyV2:
             'description': description
         }
         
-        # Quality score
+        ##### Quality score
         rsi_in_range = 60 <= data['RSI'] <= 78
         rsi_slope_positive = data['RSI_Rising']
         cross_recent = False
@@ -911,7 +925,7 @@ class SwingTradingStrategyV2:
             if self.data.iloc[j][self.fast_close_col] <= self.data.iloc[j][self.slow_close_col]:
                 cross_recent = True
                 break
-        # Quality score
+        
         quality_factors = [rsi_in_range, rsi_slope_positive, cross_recent]
         quality_score = sum(quality_factors)
         quality_details = {

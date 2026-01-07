@@ -158,7 +158,7 @@ def transform_signals(combined_signals_df, filter_date):
 #                                MAIN WORKFLOW
 # ============================================================================
 if __name__ == "__main__":    
-    sector ='fno_sects'  # 'test' / 'movers' / 'fno_sects' / 'cash'
+    sector ='movers'  # 'test' / 'movers' / 'fno_sects' / 'cash'
     start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
@@ -174,8 +174,9 @@ if __name__ == "__main__":
         case 'cash': nifty_list = cfg_nifty.nifty_cash  
         case _: print("Invalid Sector")
     
+    # Sort the list alphabetically
+    nifty_list = sorted(nifty_list)
     all_signals_df, all_data_df = process_nse_stocks(sector, nifty_list, start_date)
-
 
     if all_signals_df:
         #--------------------------------------------------------------
@@ -194,6 +195,14 @@ if __name__ == "__main__":
                 signals_filt_df[mask].to_excel(writer, sheet_name=sheet_name, index=False)
         print(f"Swing Signal Generation! Total signals: {len(signals_filt_df)}")
 
+        #--------------------------------------------------------------
+        # Export Signal Summary for each Pattern
+        #--------------------------------------------------------------
+        summary = signals_df.groupby(['regime', 'signal', 'pattern', 'exit_reason']).size().unstack(fill_value=0)
+        print("Exit Reason Summary by Signal and Pattern:")
+        summary.to_excel(summary_path, index=True)
+        print(f"Exit summary saved to {summary_path}")
+        
         #--------------------------------------------------------------
         # Export All Data
         #--------------------------------------------------------------
@@ -214,12 +223,6 @@ if __name__ == "__main__":
         combined_data_df = combined_data_df[order_cols1]
         combined_data_df.to_excel(swing_path2, index=False)
         
-        #--------------------------------------------------------------
-        # Export Signal Summary for each Pattern
-        #--------------------------------------------------------------
-        summary = signals_df.groupby(['regime', 'signal', 'pattern', 'exit_reason']).size().unstack(fill_value=0)
-        print("Exit Reason Summary by Signal and Pattern:")
-        summary.to_excel(summary_path, index=True)
-        print(f"Exit summary saved to {summary_path}")
+        
     else:
         print("No signals generated for any stock.")
