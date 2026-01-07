@@ -445,45 +445,65 @@ class SwingTradingStrategyV2:
                 return False, ''
             
             elif pattern == 'CONTINUATION':
-                ema50_slope = self.data['EMA50'].diff().iloc[current_idx]
-                if not (data['Close'] > data['EMA50'] and ema50_slope > 0):
-                    return True, 'HTF trend not intact'
-                last_swing_low = get_last_swing_low(current_idx)
-                prev_swing_low = get_prev_swing_low(current_idx)
-                if not (last_swing_low >= prev_swing_low):
-                    return True, 'Higher low not preserved'
-                bar_range = data['High'] - data['Low']
-                range_ma = get_range_ma(current_idx)
-                if not (bar_range < 1.2 * range_ma):
-                    return True, 'Pullback not corrective'
-                if not (data['Close'] >= data['EMA20']):
-                    return True, 'Dynamic support not held'
-                impulse_sum = get_impulse_range_sum(current_idx)
-                prev_impulse_sum = get_impulse_range_sum(current_idx - 10)
-                if not (impulse_sum < 1.5 * prev_impulse_sum):
-                    return True, 'Time decay not OK'
+                # 1. If Close < EMA20 for 2 bars AND momentum deteriorates
+                if current_idx >= 2:
+                    close_minus1 = self.data['Close'].iloc[current_idx-1]
+                    ema20_minus1 = self.data['EMA20'].iloc[current_idx-1]
+                    close_minus2 = self.data['Close'].iloc[current_idx-2]
+                    ema20_minus2 = self.data['EMA20'].iloc[current_idx-2]
+                    momentum_deteriorates = self.data['RSI'].iloc[current_idx] < 50  # Example: RSI < 50 indicates deterioration
+                    if close_minus1 < ema20_minus1 and close_minus2 < ema20_minus2 and momentum_deteriorates:
+                        return True, 'Close < EMA20 for 2 bars and momentum deteriorates'
+                
+                # 2. If Close > EMA50 fails
+                if not (data['Close'] > data['EMA50']):
+                    return True, 'Close not > EMA50'
+                
+                # 3. For time decay: Continuously tested after 8 bars - no higher high AND price stagnates
+                bars_held = current_idx - entry_signal['index']
+                if bars_held >= 8:
+                    # No higher high: Check if recent high <= previous high
+                    recent_high = self.data['High'].iloc[current_idx-4:current_idx+1].max()  # Last 5 bars
+                    prev_high = self.data['High'].iloc[current_idx-9:current_idx-4].max()  # Previous 5 bars
+                    no_higher_high = recent_high <= prev_high
+                    
+                    # Price stagnates: Close - Open < 1% of close
+                    current_open = self.data['Open'].iloc[current_idx]
+                    price_stagnates = abs(data['Close'] - current_open) < 0.01 * data['Close']
+                    
+                    if no_higher_high and price_stagnates:
+                        return True, 'Time decay: no higher high and price stagnates'
+                
                 return False, ''
             
             elif pattern == 'PULLBACK':
-                ema50_slope = self.data['EMA50'].diff().iloc[current_idx]
-                if not (data['Close'] > data['EMA50'] and ema50_slope > 0):
-                    return True, 'HTF trend not intact'
-                if not (data['Close'] >= data['EMA50']):
-                    return True, 'Pullback depth not OK'
+                # 1. If Close < EMA50, exit
+                if data['Close'] < data['EMA50']:
+                    return True, 'Close < EMA50'
+                
+                # 2. If new swing low < prior swing low, exit
                 last_swing_low = get_last_swing_low(current_idx)
                 prev_swing_low = get_prev_swing_low(current_idx)
-                if not (last_swing_low >= prev_swing_low):
-                    return True, 'Higher low not preserved'
-                bar_range = data['High'] - data['Low']
-                range_ma = get_range_ma(current_idx)
-                if not (bar_range < 1.3 * range_ma):
-                    return True, 'Pullback not corrective'
-                impulse_sum = get_impulse_range_sum(current_idx)
-                prev_impulse_sum = get_impulse_range_sum(current_idx - 10)
-                if not (impulse_sum < 1.5 * prev_impulse_sum):
-                    return True, 'Time decay not OK'
+                if last_swing_low < prev_swing_low:
+                    return True, 'New swing low < prior swing low'
+                
+                # 3. Time decay: Continuously evaluated after 6 bars - no higher high AND price stagnates
+                bars_held = current_idx - entry_signal['index']
+                if bars_held >= 6:
+                    # No higher high: Check if recent high <= previous high
+                    recent_high = self.data['High'].iloc[current_idx-4:current_idx+1].max()  # Last 5 bars
+                    prev_high = self.data['High'].iloc[current_idx-9:current_idx-4].max()  # Previous 5 bars
+                    no_higher_high = recent_high <= prev_high
+                    
+                    # Price stagnates: Close - Open < 1% of close
+                    current_open = self.data['Open'].iloc[current_idx]
+                    price_stagnates = abs(data['Close'] - current_open) < 0.01 * data['Close']
+                    
+                    if no_higher_high and price_stagnates:
+                        return True, 'Time decay: no higher high and price stagnates'
+                
                 return False, ''
-        
+                    
         # SHORT positions
         elif signal_type == 'SHORT':
             if pattern == 'MOMENTUM_CRASH':
