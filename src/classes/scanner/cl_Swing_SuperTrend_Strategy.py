@@ -131,12 +131,12 @@ def check_supertrend_flat(df, start_idx, tolerance=0.001):
 
 def detect_strategy_signals(df, tolerance=0.001):
     """
-    Detect LONG signals based on the refined strategy:
+    Detect buy signals based on the refined strategy:
     1. Supertrend must be GREEN (bullish)
     2. Within the GREEN period, find exactly 5 consecutive days where supertrend is flat
     3. Record highest high from those 5 flat period candles
-    4. Generate LONG signal when close > highest high (after the flat period)
-    5. After LONG signal, remain active until close < EMA-23, then sell
+    4. Generate buy signal when close > highest high (after the flat period)
+    5. After buy signal, remain active until close < EMA-23, then exit the buy
     6. Only one watchlist entry per GREEN stretch (first flat period found)
     
     Parameters:
@@ -160,8 +160,8 @@ def detect_strategy_signals(df, tolerance=0.001):
     df['buy_signal'] = False
     df['buy_date'] = ''  # Renamed from 'signal_date'
     df['position_active'] = False  # Track if a position is active after buy
-    df['sell_signal'] = False
-    df['sell_date'] = ''
+    df['buyexit_signal'] = False
+    df['buyexit_date'] = ''
     
     # Track state
     current_watchlist_high = None
@@ -239,14 +239,14 @@ def detect_strategy_signals(df, tolerance=0.001):
                 current_watchlist_high = None
                 green_period_watchlist_added = False  # Reset for next GREEN period
         
-        # If position is active, check for sell signal based on EMA-23
+        # If position is active, check for "buyexit" signal based on EMA-23
         if position_active:
             df.loc[df.index[i], 'position_active'] = True
             
             if df['close'].iloc[i] < df['ema23'].iloc[i]:
-                df.loc[df.index[i], 'sell_signal'] = True
-                df.loc[df.index[i], 'sell_date'] = df.index[i].strftime('%Y-%m-%d')
-                position_active = False  # Deactivate position after sell
+                df.loc[df.index[i], 'buyexit_signal'] = True
+                df.loc[df.index[i], 'buyexit_date'] = df.index[i].strftime('%Y-%m-%d')
+                position_active = False  # Deactivate position after exiting the buy
                 
                 #print(f"SELL SIGNAL on {df.index[i].date()}: Close {df['close'].iloc[i]:.2f} < EMA-23 {df['ema23'].iloc[i]:.2f}")
         
@@ -378,45 +378,45 @@ def summarize_signals(combined_df, nifty_list):
                 buy_date = '9999-12-31'
                 buy_close = None
             
-            # Find sell signal after buy (if buy exists)
+            # Find "buyexit" signal after buy (if buy exists)
             if buy_signal:
-                sell_row = subsequent[subsequent['sell_signal'] == True]
-                if not sell_row.empty:
-                    sell_signal = True
-                    sell_date = sell_row['sell_date'].iloc[0]
-                    sell_close = sell_row['close'].iloc[0]
+                buyexit_row = subsequent[subsequent['buyexit_signal'] == True]
+                if not buyexit_row.empty:
+                    buyexit_signal = True
+                    buyexit_date = buyexit_row['buyexit_date'].iloc[0]
+                    buyexit_close = buyexit_row['close'].iloc[0]
                 else:
-                    sell_signal = False
-                    sell_date = '9999-12-31'
-                    sell_close = None
+                    buyexit_signal = False
+                    buyexit_date = '9999-12-31'
+                    buyexit_close = None
             else:
-                sell_signal = False
-                sell_date = '9999-12-31'
-                sell_close = None
+                buyexit_signal = False
+                buyexit_date = '9999-12-31'
+                buyexit_close = None
             
             # Durations
             if buy_signal:
                 duration_watchlist_to_buy = (pd.to_datetime(buy_date) - pd.to_datetime(flat_period_start)).days
-                if sell_signal:
-                    duration_buy_to_sell = (pd.to_datetime(sell_date) - pd.to_datetime(buy_date)).days
+                if buyexit_signal:
+                    duration_buy_to_buyexit = (pd.to_datetime(buyexit_date) - pd.to_datetime(buy_date)).days
                 else:
-                    duration_buy_to_sell = 9999
+                    duration_buy_to_buyexit = 9999
             else:
                 duration_watchlist_to_buy = 9999
-                duration_buy_to_sell = 9999
+                duration_buy_to_buyexit = 9999
             
             # Price differences
             if buy_signal:
                 flat_start_date = pd.to_datetime(flat_period_start)
                 watchlist_close = stock_df.loc[flat_start_date, 'close']
                 price_diff_watchlist_buy = buy_close - watchlist_close
-                if sell_signal:
-                    price_diff_buy_sell = sell_close - buy_close
+                if buyexit_signal:
+                    price_diff_buy_buyexit = buyexit_close - buy_close
                 else:
-                    price_diff_buy_sell = None
+                    price_diff_buy_buyexit = None
             else:
                 price_diff_watchlist_buy = None
-                price_diff_buy_sell = None
+                price_diff_buy_buyexit = None
             
             # Create row
             row = {
@@ -426,21 +426,21 @@ def summarize_signals(combined_df, nifty_list):
                 'flat_period_end': flat_period_end,
                 'watchlist_active': watchlist_active,
                 'buy_signal': buy_signal,
-                'sell_signal': sell_signal,
+                'buyexit_signal': buyexit_signal,
                 'buy_date': buy_date,
-                'sell_date': sell_date,
+                'buyexit_date': buyexit_date,
                 'duration_watchlist_to_buy': duration_watchlist_to_buy,
-                'duration_buy_to_sell': duration_buy_to_sell,
+                'duration_buy_to_buyexit': duration_buy_to_buyexit,
                 'price_diff_watchlist_buy': price_diff_watchlist_buy,
-                'price_diff_buy_sell': price_diff_buy_sell,
+                'price_diff_buy_buyexit': price_diff_buy_buyexit,
                 'trend_score': group['trend_score'].iloc[0]  # Add trend_score from the flat period group                
             }
             summary_rows.append(row)
 
     summary_df = pd.DataFrame(summary_rows)
 
-    summary_cols = ['tckr_symbol', 'flat_period_start', 'flat_period_end', 'trend_score', 'buy_date', 'sell_date', 
-    "buy_signal",'sell_signal', 'duration_watchlist_to_buy', 'duration_buy_to_sell', 'price_diff_watchlist_buy', 'price_diff_buy_sell','highest_high_flat' ]
+    summary_cols = ['tckr_symbol', 'flat_period_start', 'flat_period_end', 'trend_score', 'buy_date', 'buyexit_date', 
+    "buy_signal",'buyexit_signal', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 'price_diff_watchlist_buy', 'price_diff_buy_buyexit','highest_high_flat' ]
     summary_df = summary_df[summary_cols]
 
 

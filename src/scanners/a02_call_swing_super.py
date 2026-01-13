@@ -72,18 +72,18 @@ if __name__ == "__main__":
     all_signals_df = process_nse_stocks(sector, nifty_list, start_date)
     combined_df = pd.concat(all_signals_df, ignore_index=False)
     
-    # Filter to include only rows where flat_period_start, buy_date, or sell_date is populated
+    # Filter to include only rows where flat_period_start, buy_date, or buyexit_date is populated
     combined_df.reset_index().to_excel(swing_path1, index=False)
     combined_df = combined_df[
         (combined_df['flat_period_start'] != '') | 
         (combined_df['buy_date'] != '') | 
-        (combined_df['sell_date'] != '')
+        (combined_df['buyexit_date'] != '')
     ]
     
     # Reset index to make date a column
     combined_df = combined_df.reset_index()
     comb_ord_cols = ['tckr_symbol',	'date',  'watchlist',	'watchlist_active',	'highest_high_flat',	'flat_period_start',	'flat_period_end',	
-    'buy_signal',	'buy_date',	'position_active',	'sell_signal',	'sell_date', 'trend_score',	
+    'buy_signal',	'buy_date',	'position_active',	'buyexit_signal',	'buyexit_date', 'trend_score',	
     'supertrend',	'supertrend_direction', 'final_ub',	'final_lb', 'atr',
     'open',	'high',	'low',	'close', 'volume', 'h-l', 'h-pc', 'l-pc', 'tr',	 'atr14', 'basic_ub', 'basic_lb', 'ema20', 'ema23','symbol']
     combined_df = combined_df[comb_ord_cols]
