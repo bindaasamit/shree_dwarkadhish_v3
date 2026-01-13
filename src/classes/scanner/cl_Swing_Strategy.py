@@ -706,6 +706,10 @@ class SwingTradingStrategyV2:
         # Then, update the structural_ok condition to use ema200_trend_ok instead of ema200_slope_positive
         structural_ok = ema200_trend_ok
         
+        # Add SuperTrend GREEN check for momentum burst
+        if data['ST_Direction'] != -1:
+            return False, {}
+        
         if not structural_ok:
             return False, {}
         
@@ -1049,6 +1053,10 @@ class SwingTradingStrategyV2:
 
         # Then, update the structural_ok condition to use ema200_trend_ok instead of ema200_slope_negative
         structural_ok = ema200_trend_ok
+        
+        # Add SuperTrend RED check for momentum crash
+        if data['ST_Direction'] != 1:
+            return False, {}
         
         if not structural_ok:
             return False, {}

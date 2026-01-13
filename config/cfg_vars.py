@@ -7,14 +7,16 @@ input_dir = 'D:/myCourses/shree_dwarkadhish_v3/data/input/daily_stocks_data/'
 
 sdmodel_dir = 'D:/myCourses/shree_dwarkadhish_v3/data/output/results/sd_model/'
 rpmodel_dir = 'D:/myCourses/shree_dwarkadhish_v3/data/output/results/rp_model/'
+volatility_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/volatility/'
 
 emascalpmodel_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/ema_scalp_model/'
 swing_model_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/swing_model/'
+swing_model_dir1 = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/swing_model_v1/'
 db_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/db/'
 
 
 master_series_expiry_daterange_summary_path = 'D:/myCourses/shree_dwarkadhish_v3/data/input/expiry_data/master_series_expiry_daterange_summary.xlsx'
-volatility_dir = 'D:/myCourses/shree_dwarkadhish_v3/data/input/expiry_data/2002_2025/'
+#volatility_dir = 'D:/myCourses/shree_dwarkadhish_v3/data/input/expiry_data/2002_2025/'
 hist_close_price_file_path = 'D:/myCourses/shree_dwarkadhish_v3/data/input/historical_closing_prices/historical_fno_closing_prices.csv'
 
 json_dir = 'D:/myCourses/shree_dwarkadhish_v3/data/input/json/'

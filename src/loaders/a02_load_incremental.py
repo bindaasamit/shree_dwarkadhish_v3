@@ -84,8 +84,8 @@ def main():
     """
     Load Incremental Data from all files in the directory to Sqlite DB
     """
-    incremental_dir = 'C:/Users/Amit/Downloads/nse_latest_data'
-    series_name = 'series_2025_12'  
+    incremental_dir = 'C:/Users/Amit/Downloads/nse_data'
+    series_name = 'series_2026_01'  
     load_incremental_data(incremental_dir,series_name)
 
     """
