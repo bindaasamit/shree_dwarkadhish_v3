@@ -35,7 +35,8 @@ from src.classes.scanner.cl_Swing_SuperTrend_Strategy import (calculate_supertre
     process_nse_stocks,
     summarize_signals,
     clamp,
-    trend_quality_score)
+    trend_quality_score,
+    backtest_signals)
 
 logger.add(cfg_vars.scanner_log_path, 
            rotation="50 MB", 
@@ -58,6 +59,7 @@ if __name__ == "__main__":
     swing_path1 = cfg_vars.swing_model_dir1 + f'{sector}_data.xlsx'
     swing_path2 = cfg_vars.swing_model_dir1 + f'{sector}_signals.xlsx'
     summary_path = cfg_vars.swing_model_dir1 + f'{sector}_summary.xlsx'
+    backtest_path = cfg_vars.swing_model_dir1 + f'{sector}_backtest_results.xlsx'
 
     match sector:
         case 'test': nifty_list = cfg_nifty.nifty_test
@@ -102,5 +104,9 @@ if __name__ == "__main__":
     # Save Results
     combined_df.reset_index().to_excel(swing_path2, index=False)  # Include date as a column
     summary_df.to_excel(summary_path, index=False)
+
+    #Backtest Output Summary
+    results_df = backtest_signals(summary_df)
+    results_df.to_excel(backtest_path, index=False)
     
     print(f"Summary DataFrame created with {len(summary_df)} rows!")

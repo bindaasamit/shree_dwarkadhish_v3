@@ -191,7 +191,9 @@ def detect_strategy_signals(df, tolerance=0.001):
                         flat_window = df.iloc[:i+5]
                         score = trend_quality_score(flat_window)
                         
-                        # Found a flat period!
+                        # Removed threshold check - always proceed to add watchlist
+                        
+                        # Found a valid flat period!
                         flat_period_data = df.iloc[i:i+5]
                         watchlist_high = flat_period_data['high'].max()
                         
@@ -411,12 +413,12 @@ def summarize_signals(combined_df, nifty_list):
                 watchlist_close = stock_df.loc[flat_start_date, 'close']
                 price_diff_watchlist_buy = buy_close - watchlist_close
                 if buyexit_signal:
-                    price_diff_buy_buyexit = buyexit_close - buy_close
+                    profit_or_loss = buyexit_close - buy_close
                 else:
-                    price_diff_buy_buyexit = None
+                    profit_or_loss = None
             else:
                 price_diff_watchlist_buy = None
-                price_diff_buy_buyexit = None
+                profit_or_loss = None
             
             # Create row
             row = {
@@ -429,10 +431,12 @@ def summarize_signals(combined_df, nifty_list):
                 'buyexit_signal': buyexit_signal,
                 'buy_date': buy_date,
                 'buyexit_date': buyexit_date,
+                'buy_close': buy_close,  # Added
+                'buyexit_close': buyexit_close,  # Added
                 'duration_watchlist_to_buy': duration_watchlist_to_buy,
                 'duration_buy_to_buyexit': duration_buy_to_buyexit,
                 'price_diff_watchlist_buy': price_diff_watchlist_buy,
-                'price_diff_buy_buyexit': price_diff_buy_buyexit,
+                'profit_or_loss': profit_or_loss,
                 'trend_score': group['trend_score'].iloc[0]  # Add trend_score from the flat period group                
             }
             summary_rows.append(row)
@@ -440,14 +444,14 @@ def summarize_signals(combined_df, nifty_list):
     summary_df = pd.DataFrame(summary_rows)
 
     summary_cols = ['tckr_symbol', 'flat_period_start', 'flat_period_end', 'trend_score', 'buy_date', 'buyexit_date', 
-    "buy_signal",'buyexit_signal', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 'price_diff_watchlist_buy', 'price_diff_buy_buyexit','highest_high_flat' ]
+    "buy_signal",'buyexit_signal', 'buy_close', 'buyexit_close', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 'price_diff_watchlist_buy', 'profit_or_loss','highest_high_flat' ]  # Added buy_close and buyexit_close
     summary_df = summary_df[summary_cols]
 
-
+    # NEW: Deduplicate by symbol and buy_date to remove rows where multiple flat periods lead to the same buy
+    summary_df = summary_df.drop_duplicates(subset=['tckr_symbol', 'buy_date'], keep='first')
 
     # Filter out old flat periods without buy signals - Amit enable this later
     #current_date = pd.to_datetime(date.today())
-    #summary_df['days_old'] = (current_date - pd.to_datetime(summary_df['flat_period_end'])).dt.days
     #summary_df = summary_df[~((summary_df['days_old'] > 50) & (summary_df['buy_signal'] == False))]
     #summary_df = summary_df.drop(columns=['days_old']) 
     return summary_df
@@ -460,7 +464,9 @@ def trend_quality_score(data,
                         range_lookback=15,
                         efficiency_lookback=10):
     """
-    Returns Trend Quality Score between 0 and 100
+    Returns Trend Quality Score between 0 and 100.
+    Calibrated to detect trending conditions (moderate momentum) rather than strong trends.
+    Use score >40-50 as threshold to act on trade signals.
     """
 
     if len(data) < max(atr_lookback, range_lookback, efficiency_lookback) + 5:
@@ -470,52 +476,133 @@ def trend_quality_score(data,
     score = 0
 
     # ===============================
-    #1️⃣ ATR Expansion (0–20)
+    #1️⃣ ATR Expansion (0–20) - Full score at 30% ATR growth (detects moderate volatility increase)
     # ===============================
     atr_now = latest["atr14"]
     atr_then = data["atr14"].iloc[-atr_lookback]
 
     atr_ratio = atr_now / atr_then if atr_then > 0 else 0
-    atr_score = clamp((atr_ratio - 1) / 0.5) * 20
+    atr_score = clamp((atr_ratio - 1) / 0.2) * 20  # Changed from 0.5
     score += atr_score
 
     # ===============================
-    # 2️⃣ EMA Separation (0–20)
+    # 2️⃣ EMA Separation (0–20) - Full score at 0.5% distance from EMA20 (detects basic trend separation)
     # ===============================
     ema20 = latest["ema20"]
     ema_dist = abs(latest["close"] - ema20) / ema20
 
-    ema_score = clamp(ema_dist / 0.015) * 20
+    ema_score = clamp(ema_dist / 0.005) * 20  # Changed from 0.015
     score += ema_score
 
     # ===============================
-    # 3️⃣ Range Expansion (0–20)
+    # 3️⃣ Range Expansion (0–20) - Full score at 2% range (detects moderate price swings)
     # ===============================
     recent_high = data["high"].iloc[-range_lookback:].max()
     recent_low = data["low"].iloc[-range_lookback:].min()
     range_ratio = (recent_high - recent_low) / latest["close"]
 
-    range_score = clamp(range_ratio / 0.04) * 20
+    range_score = clamp(range_ratio / 0.02) * 20  # Changed from 0.04
     score += range_score
 
     # ===============================
-    # 4️⃣ Supertrend Slope (0–20)
+    # 4️⃣ Supertrend Slope (0–20) - Full score at 0.5% slope (detects directional momentum)
     # ===============================
     st_now = latest["supertrend"]
     st_then = data["supertrend"].iloc[-5]
     st_slope = abs(st_now - st_then) / latest["close"]
 
-    st_score = clamp(st_slope / 0.01) * 20
+    st_score = clamp(st_slope / 0.005) * 20  # Changed from 0.01
     score += st_score
 
     # ===============================
-    # 5️⃣ Price Efficiency (0–20)
+    # 5️⃣ Price Efficiency (0–20) - Full score at 40% efficiency (detects somewhat directional movement)
     # ===============================
     price_move = abs(latest["close"] - data["close"].iloc[-efficiency_lookback])
     path_length = data["close"].iloc[-efficiency_lookback:].diff().abs().sum()
 
     efficiency = price_move / path_length if path_length > 0 else 0
-    efficiency_score = clamp(efficiency / 0.6) * 20
+    efficiency_score = clamp(efficiency / 0.4) * 20  # Changed from 0.6
     score += efficiency_score
 
     return round(score, 2)
+
+def backtest_signals(summary_df, initial_capital=100000, position_size_pct=0.1):
+    """
+    Backtest the Supertrend-based swing signals from summary_df (long-only).
+    
+    Args:
+        summary_df: DataFrame from summarize_signals (with buy/exit dates and prices).
+        initial_capital: Starting capital.
+        position_size_pct: Percentage of capital per trade.
+    
+    Returns:
+        pandas.DataFrame: Trade log with per-trade details.
+        (Metrics are printed separately for simplicity.)
+    """
+    capital = initial_capital
+    trade_log = []
+    peak_capital = initial_capital
+    max_drawdown = 0
+    returns = []
+    
+    for _, signal in summary_df.iterrows():
+        if not signal['buy_signal']:
+            continue  # Skip if no buy signal
+        
+        symbol = signal['tckr_symbol']
+        entry_price = signal['buy_close']
+        exit_price = signal['buyexit_close']
+        
+        if entry_price is None:
+            continue  # Skip invalid entries
+        
+        # If no exit, assume exit at last close (placeholder; in real use, fetch from data)
+        if exit_price is None:
+            exit_price = entry_price * 1.05  # Placeholder: assume 5% gain; replace with actual logic
+        
+        # Position size
+        position_size = capital * position_size_pct
+        shares = position_size / entry_price
+        
+        # P&L
+        pnl = (exit_price - entry_price) * shares
+        capital += pnl
+        returns.append(pnl / position_size)
+        
+        # Drawdown
+        peak_capital = max(peak_capital, capital)
+        drawdown = (peak_capital - capital) / peak_capital
+        max_drawdown = max(max_drawdown, drawdown)
+        
+        # Log trade
+        trade_log.append({
+            'symbol': symbol,
+            'entry_date': signal['buy_date'],
+            'exit_date': signal['buyexit_date'] if signal['buyexit_signal'] else 'Open',
+            'entry_price': entry_price,
+            'exit_price': exit_price,
+            'pnl': pnl,
+            'profit_or_loss': signal.get('profit_or_loss', pnl / shares)  # Use existing or calculated
+        })
+    
+    # Metrics (printed separately)
+    total_return = (capital - initial_capital) / initial_capital
+    wins = sum(1 for trade in trade_log if trade['pnl'] > 0)
+    win_rate = wins / len(trade_log) if trade_log else 0
+    
+    if returns:
+        avg_return = np.mean(returns)
+        std_return = np.std(returns)
+        sharpe_ratio = (avg_return / std_return) * np.sqrt(252) if std_return > 0 else 0
+    else:
+        sharpe_ratio = 0
+    
+    print(f"Backtest Metrics:")
+    print(f"  Total Return: {total_return:.2%}")
+    print(f"  Win Rate: {win_rate:.2%}")
+    print(f"  Max Drawdown: {max_drawdown:.2%}")
+    print(f"  Sharpe Ratio: {sharpe_ratio:.2f}")
+    print(f"  Final Capital: {capital:.2f}")
+    
+    # Return trade log as DataFrame
+    return pd.DataFrame(trade_log)
