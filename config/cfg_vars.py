@@ -346,7 +346,7 @@ column_mapping = {
                 'TtlTrfVal' : 'total_transfer_value'
             }
 # Read Query
-nse_data_read_query = "SELECT tckr_symbol, trade_dt, scty_series, open_price, high_price, low_price, closing_price,last_price, prev_closing_price, total_trading_volume, total_transfer_value, series_start_dt, series_end_dt, series_name from nse_data"
+nse_data_read_query = "SELECT tckr_symbol, trade_dt, scty_series, open_price, high_price, low_price, closing_price,last_price, prev_closing_price, total_trading_volume, total_transfer_value from historical_stocks"
 #----------------------------------------------------------------------------------------------------------------------
 #                                               EMA VARIABLES
 #----------------------------------------------------------------------------------------------------------------------

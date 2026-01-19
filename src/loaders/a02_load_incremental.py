@@ -33,7 +33,7 @@ logger.add(cfg_vars.scanner_log_path,
 #------------------------------------------------------------------------------
 ###            Get Historical Data from yfinance and transform to required format
 #------------------------------------------------------------------------------
-def load_incremental_data(incremental_dir,series_name):
+def load_incremental_data(incremental_dir):
     files = os.listdir(incremental_dir)
     print(f"Found {len(files)} files in {incremental_dir} to process.")
     for file in files:
@@ -60,18 +60,19 @@ def load_incremental_data(incremental_dir,series_name):
         df = df.rename(columns=cfg_vars.column_mapping)        
 
         #Add the 3 new columns
-        df['series_start_dt'] = ''
-        df['series_end_dt']  = ''
-        df['series_name'] = series_name
+        #df['series_start_dt'] = ''
+        #df['series_end_dt']  = ''
+        #df['series_name'] = series_name
 
         #Remove other series
         print("Count of records before filtering series:", len(df))
         df = df[df['scty_series'] == 'EQ']
         print("Count of records after filtering series:", len(df))
-        
+
+        df['trade_dt'] = pd.to_datetime(df['trade_dt']).dt.strftime('%Y-%m-%d %H:%M:%S')    
         #Load the incremental Data to DB
         db_path = cfg_vars.db_dir + cfg_vars.db_name
-        table_name='nse_data'       
+        table_name='historical_stocks'       
 
         conn = sqlite3.connect(db_path)
         df.to_sql(table_name, conn, if_exists="append", index=False)
@@ -85,8 +86,9 @@ def main():
     Load Incremental Data from all files in the directory to Sqlite DB
     """
     incremental_dir = 'C:/Users/Amit/Downloads/nse_data'
-    series_name = 'series_2026_01'  
-    load_incremental_data(incremental_dir,series_name)
+    #series_name = 'series_2026_01'  
+    #load_incremental_data(incremental_dir,series_name)
+    load_incremental_data(incremental_dir)
 
     """
     Update the series_name column in the sqlite DB for all records with the new series_name

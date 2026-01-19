@@ -51,8 +51,8 @@ logger.add(cfg_vars.scanner_log_path,
 #--------------------------------------------------------------------------------------------------------------------- 
 # Example usage
 if __name__ == "__main__":
-    sector ='test'  # 'test' / 'movers' / 'fno_sects' / 'cash'
-    start_date = '2024-01-01'
+    sector ='fno_sects'  # 'test' / 'movers' / 'fno_sects' / 'small_mid'
+    start_date = '2025-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
 
@@ -63,10 +63,12 @@ if __name__ == "__main__":
 
     match sector:
         case 'test': nifty_list = cfg_nifty.nifty_test
+        case 'small_mid': nifty_list = cfg_nifty.nifty_mid_small_caps
         case 'movers': nifty_list = cfg_nifty.nifty_movers
         case 'fno_sects': nifty_list = list(set(cfg_nifty.nifty_fno + cfg_nifty.nifty_sectoral))
         case 'cash': nifty_list = cfg_nifty.nifty_cash  
         case _: print("Invalid Sector")
+    
     
     # Sort the list alphabetically
     nifty_list = sorted(nifty_list)
@@ -87,7 +89,7 @@ if __name__ == "__main__":
     comb_ord_cols = ['tckr_symbol',	'date',  'watchlist',	'watchlist_active',	'highest_high_flat',	'flat_period_start',	'flat_period_end',	
     'buy_signal',	'buy_date',	'position_active',	'buyexit_signal',	'buyexit_date', 'trend_score',	
     'supertrend',	'supertrend_direction', 'final_ub',	'final_lb', 'atr',
-    'open',	'high',	'low',	'close', 'volume', 'h-l', 'h-pc', 'l-pc', 'tr',	 'atr14', 'basic_ub', 'basic_lb', 'ema20', 'ema23','symbol']
+    'open',	'high',	'low',	'close', 'volume', 'h-l', 'h-pc', 'l-pc', 'tr',	 'atr14', 'basic_ub', 'basic_lb', 'ema20', 'ema50','symbol','exit_reason']
     combined_df = combined_df[comb_ord_cols]
 
     # Recalculate totals after filtering

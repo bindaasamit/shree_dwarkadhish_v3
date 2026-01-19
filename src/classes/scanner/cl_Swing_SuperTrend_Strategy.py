@@ -136,7 +136,10 @@ def detect_strategy_signals(df, tolerance=0.001):
     2. Within the GREEN period, find exactly 5 consecutive days where supertrend is flat
     3. Record highest high from those 5 flat period candles
     4. Generate buy signal when close > highest high (after the flat period)
-    5. After buy signal, remain active until close < EMA-23, then exit the buy
+    5. After buy signal, remain active until exit conditions are met:
+       - Close < EMA50
+       - OR (Close < EMA23 for 2 bars AND RSI < 50 AND trend_score < 40)
+       - OR Supertrend flips RED
     6. Only one watchlist entry per GREEN stretch (first flat period found)
     
     Parameters:
@@ -148,8 +151,12 @@ def detect_strategy_signals(df, tolerance=0.001):
     """
     df = calculate_supertrend(df.copy())
     
-    # Calculate EMA-23
+    # Calculate EMA-23 and EMA-50
     df['ema23'] = df['close'].ewm(span=23, adjust=False).mean()
+    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+    
+    # Calculate RSI
+    df['rsi'] = ta.rsi(df['close'], length=14)
     
     # Initialize signal columns
     df['watchlist'] = False
@@ -162,12 +169,15 @@ def detect_strategy_signals(df, tolerance=0.001):
     df['position_active'] = False  # Track if a position is active after buy
     df['buyexit_signal'] = False
     df['buyexit_date'] = ''
+    df['exit_reason'] = ''  # New column for exit reason
     
     # Track state
     current_watchlist_high = None
     watchlist_active = False
     position_active = False
     green_period_watchlist_added = False  # Flag to ensure only one watchlist per GREEN period
+    last_buy_index = None  # Track the index of the last buy signal
+    current_trend_score = None  # Trend score for the current flat period
     
     i = 0
     while i < len(df):
@@ -190,8 +200,7 @@ def detect_strategy_signals(df, tolerance=0.001):
                         # Calculate trend quality score
                         flat_window = df.iloc[:i+5]
                         score = trend_quality_score(flat_window)
-                        
-                        # Removed threshold check - always proceed to add watchlist
+                        current_trend_score = score  # Store for potential position
                         
                         # Found a valid flat period!
                         flat_period_data = df.iloc[i:i+5]
@@ -210,9 +219,6 @@ def detect_strategy_signals(df, tolerance=0.001):
                         watchlist_active = True
                         green_period_watchlist_added = True  # Prevent multiple watchlists in same GREEN period
                         
-                        #print(f"Watchlist added: Flat period from {df.index[i].date()} to {df.index[i+4].date()} (5 days)")
-                        #print(f"  Highest High = {watchlist_high:.2f}")
-                        
                         # Jump to end of flat period and continue
                         i = i + 5
                         continue
@@ -227,8 +233,7 @@ def detect_strategy_signals(df, tolerance=0.001):
                 df.loc[df.index[i], 'buy_signal'] = True
                 df.loc[df.index[i], 'buy_date'] = df.index[i].strftime('%Y-%m-%d')
                 position_active = True  # Activate position after buy
-                
-                #print(f"BUY SIGNAL on {df.index[i].date()}: Close {df['close'].iloc[i]:.2f} > Highest High {current_watchlist_high:.2f}")
+                last_buy_index = i  # Track the buy index
                 
                 # Deactivate watchlist after buy signal (but position remains active)
                 watchlist_active = False
@@ -236,21 +241,27 @@ def detect_strategy_signals(df, tolerance=0.001):
             
             # Deactivate watchlist if Supertrend turns RED
             elif current_direction == -1:
-                #print(f"Watchlist deactivated on {df.index[i].date()} - Supertrend turned RED")
                 watchlist_active = False
                 current_watchlist_high = None
                 green_period_watchlist_added = False  # Reset for next GREEN period
         
-        # If position is active, check for "buyexit" signal based on EMA-23
+        # If position is active, check for exit signals
         if position_active:
             df.loc[df.index[i], 'position_active'] = True
             
-            if df['close'].iloc[i] < df['ema23'].iloc[i]:
+            # Check exit conditions
+            reason = None
+            if df['close'].iloc[i] < df['ema50'].iloc[i]:
+                reason = 'ema50 was breached'
+            
+            if reason:
                 df.loc[df.index[i], 'buyexit_signal'] = True
                 df.loc[df.index[i], 'buyexit_date'] = df.index[i].strftime('%Y-%m-%d')
-                position_active = False  # Deactivate position after exiting the buy
-                
-                #print(f"SELL SIGNAL on {df.index[i].date()}: Close {df['close'].iloc[i]:.2f} < EMA-23 {df['ema23'].iloc[i]:.2f}")
+                if last_buy_index is not None:
+                    df.loc[df.index[last_buy_index], 'exit_reason'] = reason
+                position_active = False
+                last_buy_index = None
+                current_trend_score = None  # Reset                
         
         i += 1
     
@@ -261,19 +272,21 @@ def read_nse_data(nifty_list,start_date):
     Read NSE_DATA table from SQLite DB and filter based on start_date and nifty_list
     '''
     db_path = cfg_vars.db_dir + cfg_vars.db_name
-    table_name='nse_data'       
+    table_name='historical_stocks'       
     query = cfg_vars.nse_data_read_query
     
     all_stocks_df = util_funcs.read_data(db_path, table_name, query) 
     print(f"No of Records read from NSE_DATA: {len(all_stocks_df)}.")
- 
+    print(f"Max trade date in NSE_DATA: {max(all_stocks_df['trade_dt'])}")
     # Filter for records after 2021-01-01 and where tckr_symbol is in nifty_list
     all_stocks_df['trade_dt'] = pd.to_datetime(all_stocks_df['trade_dt'], errors='coerce')  # Ensure datetime format
+    
     all_stocks_df = all_stocks_df[
         (all_stocks_df['trade_dt'] >= pd.to_datetime(start_date)) & 
         (all_stocks_df['trade_dt'] <= pd.to_datetime(date.today())) & 
         (all_stocks_df['tckr_symbol'].isin(nifty_list))]
-    print(f"No of Records post 2001-01-01 and in nifty_list from NSE_DATA: {len(all_stocks_df)}.")
+
+    print(f"No of Records post filtering from NSE_DATA: {len(all_stocks_df)}.")
     #all_stocks_df.to_excel('D:/myCourses/shree_dwarkadhish_v3/data/output/results/sdmodel/all_stocks_filtered.xlsx', index=False)
     all_stocks_df['trade_dt'] = all_stocks_df['trade_dt'].dt.strftime('%Y-%m-%d')
     print(min(all_stocks_df['trade_dt']), max(all_stocks_df['trade_dt']))
@@ -414,11 +427,14 @@ def summarize_signals(combined_df, nifty_list):
                 price_diff_watchlist_buy = buy_close - watchlist_close
                 if buyexit_signal:
                     profit_or_loss = buyexit_close - buy_close
+                    profit_or_loss_percent = (profit_or_loss / buy_close) * 100
                 else:
                     profit_or_loss = None
+                    profit_or_loss_percent = None
             else:
                 price_diff_watchlist_buy = None
                 profit_or_loss = None
+                profit_or_loss_percent = None
             
             # Create row
             row = {
@@ -437,23 +453,25 @@ def summarize_signals(combined_df, nifty_list):
                 'duration_buy_to_buyexit': duration_buy_to_buyexit,
                 'price_diff_watchlist_buy': price_diff_watchlist_buy,
                 'profit_or_loss': profit_or_loss,
-                'trend_score': group['trend_score'].iloc[0]  # Add trend_score from the flat period group                
+                'profit_or_loss_percent': profit_or_loss_percent,
+                'trend_score': group['trend_score'].iloc[0],  # Add trend_score from the flat period group                
+                'exit_reason': buyexit_row['exit_reason'].iloc[0] if not buyexit_row.empty and 'exit_reason' in buyexit_row.columns else '',  # Safe access
             }
             summary_rows.append(row)
 
     summary_df = pd.DataFrame(summary_rows)
 
     summary_cols = ['tckr_symbol', 'flat_period_start', 'flat_period_end', 'trend_score', 'buy_date', 'buyexit_date', 
-    "buy_signal",'buyexit_signal', 'buy_close', 'buyexit_close', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 'price_diff_watchlist_buy', 'profit_or_loss','highest_high_flat' ]  # Added buy_close and buyexit_close
+    "buy_signal",'buyexit_signal', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 
+    'price_diff_watchlist_buy', 'profit_or_loss_percent', 'highest_high_flat', 'exit_reason','buy_close', 'buyexit_close','profit_or_loss']  # Added buy_close and buyexit_close
     summary_df = summary_df[summary_cols]
 
+    
+    # Filter out trades where duration from buy to exit is 50 days or more
+    duration_watchlist_to_buy_threshold = 30
+    summary_df = summary_df[~((summary_df['buy_signal'] == True) & (summary_df['duration_watchlist_to_buy'] > duration_watchlist_to_buy_threshold))]
     # NEW: Deduplicate by symbol and buy_date to remove rows where multiple flat periods lead to the same buy
     summary_df = summary_df.drop_duplicates(subset=['tckr_symbol', 'buy_date'], keep='first')
-
-    # Filter out old flat periods without buy signals - Amit enable this later
-    #current_date = pd.to_datetime(date.today())
-    #summary_df = summary_df[~((summary_df['days_old'] > 50) & (summary_df['buy_signal'] == False))]
-    #summary_df = summary_df.drop(columns=['days_old']) 
     return summary_df
 
 def clamp(value, min_val=0, max_val=1):
@@ -582,7 +600,8 @@ def backtest_signals(summary_df, initial_capital=100000, position_size_pct=0.1):
             'entry_price': entry_price,
             'exit_price': exit_price,
             'pnl': pnl,
-            'profit_or_loss': signal.get('profit_or_loss', pnl / shares)  # Use existing or calculated
+            'profit_or_loss': signal.get('profit_or_loss', pnl / shares),  # Use existing or calculated
+            'exit_reason': signal.get('exit_reason', '')  # Add this
         })
     
     # Metrics (printed separately)
