@@ -100,8 +100,6 @@ def calculate_supertrend(df, period=10, multiplier=3):
                 df.loc[df.index[i], 'supertrend'] = df['final_ub'].iloc[i]
                 df.loc[df.index[i], 'supertrend_direction'] = -1
     
-    # Calculate EMA20
-    df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     return df
 
 def check_supertrend_flat(df, start_idx, tolerance=0.001):
@@ -127,7 +125,12 @@ def check_supertrend_flat(df, start_idx, tolerance=0.001):
         return False
     
     variations = abs(st_values - mean_val) / mean_val
-    return all(variations <= tolerance)
+    flat_check = all(variations <= tolerance)
+    
+    # Additional slope constraint: abs(st[t] - st[t-4]) / close < 0.15 * ATR
+    slope_check = abs(st_values.iloc[-1] - st_values.iloc[0]) / df['close'].iloc[start_idx + 4] < 0.15 * df['atr14'].iloc[start_idx + 4]
+    
+    return flat_check and slope_check
 
 def detect_strategy_signals(df, tolerance=0.001):
     """
@@ -137,7 +140,7 @@ def detect_strategy_signals(df, tolerance=0.001):
     3. Record highest high from those 5 flat period candles
     4. Generate buy signal when close > highest high (after the flat period)
     5. After buy signal, remain active until exit conditions are met:
-       - Close < EMA50
+       - Close < EMA50 for 2 consecutive days
        - OR (Close < EMA23 for 2 bars AND RSI < 50 AND trend_score < 40)
        - OR Supertrend flips RED
     6. Only one watchlist entry per GREEN stretch (first flat period found)
@@ -151,13 +154,37 @@ def detect_strategy_signals(df, tolerance=0.001):
     """
     df = calculate_supertrend(df.copy())
     
-    # Calculate EMA-23 and EMA-50
+    # Calculate EMA-20,EMA-23 and EMA-50
+    df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema23'] = df['close'].ewm(span=23, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
     # Calculate RSI
     df['rsi'] = ta.rsi(df['close'], length=14)
     
+    # Calculate RSI signal flag
+    df['rsi_signal_flag'] = ''
+    for i in range(2, len(df)):
+        rsi_current = df['rsi'].iloc[i]
+        rsi_prev1 = df['rsi'].iloc[i-1]
+        rsi_prev2 = df['rsi'].iloc[i-2]
+        if pd.notna(rsi_current) and pd.notna(rsi_prev1) and pd.notna(rsi_prev2):
+            if rsi_current > 60 and rsi_current > rsi_prev1 and rsi_prev1 > rsi_prev2:
+                df.loc[df.index[i], 'rsi_signal_flag'] = 'bullish'
+            elif rsi_current < 40 and rsi_current < rsi_prev1 and rsi_prev1 < rsi_prev2:
+                df.loc[df.index[i], 'rsi_signal_flag'] = 'bearish'
+    
+    # Initialize price_move_pct columns
+    #df['price_move_pct_5d'] = np.nan
+    #df['price_move_pct_10d'] = np.nan
+    #df['price_move_pct_15d'] = np.nan
+    # Calculate price_move_pct using shift
+    df['price_move_pct_5d'] = np.ceil(((df['close'].shift(-5) - df['close']) / df['close']) * 100)
+    df['price_move_pct_10d'] = np.ceil(((df['close'].shift(-10) - df['close']) / df['close']) * 100)
+    df['price_move_pct_15d'] = np.ceil(((df['close'].shift(-15) - df['close']) / df['close']) * 100)
+
+# Remove the previous loop for price_move_pct calculation.
+
     # Initialize signal columns
     df['watchlist'] = False
     df['watchlist_active'] = False  # Currently active watchlist
@@ -178,6 +205,7 @@ def detect_strategy_signals(df, tolerance=0.001):
     green_period_watchlist_added = False  # Flag to ensure only one watchlist per GREEN period
     last_buy_index = None  # Track the index of the last buy signal
     current_trend_score = None  # Trend score for the current flat period
+    consecutive_ema50_breach = 0  # New: Track consecutive EMA50 breaches
     
     i = 0
     while i < len(df):
@@ -234,11 +262,12 @@ def detect_strategy_signals(df, tolerance=0.001):
                 df.loc[df.index[i], 'buy_date'] = df.index[i].strftime('%Y-%m-%d')
                 position_active = True  # Activate position after buy
                 last_buy_index = i  # Track the buy index
+                consecutive_ema50_breach = 0  # Reset consecutive breach counter on new position
                 
                 # Deactivate watchlist after buy signal (but position remains active)
                 watchlist_active = False
                 current_watchlist_high = None
-            
+
             # Deactivate watchlist if Supertrend turns RED
             elif current_direction == -1:
                 watchlist_active = False
@@ -251,9 +280,22 @@ def detect_strategy_signals(df, tolerance=0.001):
             
             # Check exit conditions
             reason = None
+            ### Exit Criteria-1 ('ema50 breached for 2 consecutive days')
+            # Update consecutive breach counter
             if df['close'].iloc[i] < df['ema50'].iloc[i]:
-                reason = 'ema50 was breached'
-            
+                consecutive_ema50_breach += 1
+            else:
+                consecutive_ema50_breach = 0
+
+            if consecutive_ema50_breach >= 2:
+                reason = 'ema50 breached for 2 consecutive days'
+
+            ### Exit Criteria-2 (Close < EMA23 for 2 bars AND RSI < 50 AND trend_score < 40) 
+            if (df['rsi'].iloc[i] < 50 and 
+                df['high'].iloc[i] < df['high'].iloc[i-1] and 
+                df['atr14'].iloc[i] < df['atr14'].iloc[i-1] < df['atr14'].iloc[i-2]):
+                reason = 'early exit: RSI <50, lower high, ATR contracting'
+
             if reason:
                 df.loc[df.index[i], 'buyexit_signal'] = True
                 df.loc[df.index[i], 'buyexit_date'] = df.index[i].strftime('%Y-%m-%d')
@@ -388,10 +430,12 @@ def summarize_signals(combined_df, nifty_list):
                 buy_signal = True
                 buy_date = buy_row['buy_date'].iloc[0]
                 buy_close = buy_row['close'].iloc[0]
+                rsi_signal_flag = buy_row['rsi_signal_flag'].iloc[0] if not buy_row.empty else ''
             else:
                 buy_signal = False
                 buy_date = '9999-12-31'
                 buy_close = None
+                rsi_signal_flag = ''
             
             # Find "buyexit" signal after buy (if buy exists)
             if buy_signal:
@@ -435,7 +479,7 @@ def summarize_signals(combined_df, nifty_list):
                 price_diff_watchlist_buy = None
                 profit_or_loss = None
                 profit_or_loss_percent = None
-            
+
             # Create row
             row = {
                 'tckr_symbol': tckr_symbol,
@@ -455,18 +499,16 @@ def summarize_signals(combined_df, nifty_list):
                 'profit_or_loss': profit_or_loss,
                 'profit_or_loss_percent': profit_or_loss_percent,
                 'trend_score': group['trend_score'].iloc[0],  # Add trend_score from the flat period group                
-                'exit_reason': buyexit_row['exit_reason'].iloc[0] if not buyexit_row.empty and 'exit_reason' in buyexit_row.columns else '',  # Safe access
+                'rsi_signal_flag': rsi_signal_flag,
+                'exit_reason': buyexit_row['exit_reason'].iloc[0] if not buyexit_row.empty and 'exit_reason' in buyexit_row.columns else '',  # Safe access                            
+                'price_move_pct_5d': buy_row['price_move_pct_5d'].iloc[0] if not buy_row.empty and 'price_move_pct_5d' in buy_row.columns else np.nan,
+                'price_move_pct_10d': buy_row['price_move_pct_10d'].iloc[0] if not buy_row.empty and 'price_move_pct_10d' in buy_row.columns else np.nan,
+                'price_move_pct_15d': buy_row['price_move_pct_15d'].iloc[0] if not buy_row.empty and 'price_move_pct_15d' in buy_row.columns else np.nan
             }
             summary_rows.append(row)
 
     summary_df = pd.DataFrame(summary_rows)
 
-    summary_cols = ['tckr_symbol', 'flat_period_start', 'flat_period_end', 'trend_score', 'buy_date', 'buyexit_date', 
-    "buy_signal",'buyexit_signal', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 
-    'price_diff_watchlist_buy', 'profit_or_loss_percent', 'highest_high_flat', 'exit_reason','buy_close', 'buyexit_close','profit_or_loss']  # Added buy_close and buyexit_close
-    summary_df = summary_df[summary_cols]
-
-    
     # Filter out trades where duration from buy to exit is 50 days or more
     duration_watchlist_to_buy_threshold = 30
     summary_df = summary_df[~((summary_df['buy_signal'] == True) & (summary_df['duration_watchlist_to_buy'] > duration_watchlist_to_buy_threshold))]

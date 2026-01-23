@@ -51,7 +51,7 @@ logger.add(cfg_vars.scanner_log_path,
 #--------------------------------------------------------------------------------------------------------------------- 
 # Example usage
 if __name__ == "__main__":
-    sector ='fno_sects'  # 'test' / 'movers' / 'fno_sects' / 'small_mid'
+    sector ='small_mid'  # 'test' / 'movers' / 'fno_sects' / 'small_mid'
     start_date = '2025-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
@@ -73,11 +73,12 @@ if __name__ == "__main__":
     # Sort the list alphabetically
     nifty_list = sorted(nifty_list)
 
+    ### Step1. Generate all Data points
     all_signals_df = process_nse_stocks(sector, nifty_list, start_date)
     combined_df = pd.concat(all_signals_df, ignore_index=False)
     
-    # Filter to include only rows where flat_period_start, buy_date, or buyexit_date is populated
-    combined_df.reset_index().to_excel(swing_path1, index=False)
+
+    ### Step2. Filter to include only rows where flat_period_start, buy_date, or buyexit_date is populated
     combined_df = combined_df[
         (combined_df['flat_period_start'] != '') | 
         (combined_df['buy_date'] != '') | 
@@ -87,9 +88,10 @@ if __name__ == "__main__":
     # Reset index to make date a column
     combined_df = combined_df.reset_index()
     comb_ord_cols = ['tckr_symbol',	'date',  'watchlist',	'watchlist_active',	'highest_high_flat',	'flat_period_start',	'flat_period_end',	
-    'buy_signal',	'buy_date',	'position_active',	'buyexit_signal',	'buyexit_date', 'trend_score',	
+    'buy_signal',	'buy_date',	'position_active',	'buyexit_signal',	'buyexit_date', 'trend_score',	'rsi', 'rsi_signal_flag',
     'supertrend',	'supertrend_direction', 'final_ub',	'final_lb', 'atr',
-    'open',	'high',	'low',	'close', 'volume', 'h-l', 'h-pc', 'l-pc', 'tr',	 'atr14', 'basic_ub', 'basic_lb', 'ema20', 'ema50','symbol','exit_reason']
+    'open',	'high',	'low',	'close', 'volume', 'h-l', 'h-pc', 'l-pc', 'tr',	 'atr14', 'basic_ub', 'basic_lb', 'ema20', 'ema50','symbol','exit_reason',
+    'price_move_pct_5d', 'price_move_pct_10d', 'price_move_pct_15d']
     combined_df = combined_df[comb_ord_cols]
 
     # Recalculate totals after filtering
@@ -99,16 +101,20 @@ if __name__ == "__main__":
     print(f"Total flat periods found (after filtering): {total_watchlists // 5}")  # Assuming 5 rows per period
     print(f"Total buy signals generated (after filtering): {total_buy_signals}")
     
-    ### Summarize the Signals
+    ###Step3. Summarize Signals
     summary_df = summarize_signals(combined_df, nifty_list)
-    #
-       
-    # Save Results
+    summary_cols = ['tckr_symbol', 'flat_period_start', 'flat_period_end', 'trend_score', 'buy_date', 'buyexit_date', 
+    "buy_signal",'buyexit_signal', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 
+    'price_diff_watchlist_buy', 'profit_or_loss_percent', 'highest_high_flat', 'exit_reason','buy_close', 'buyexit_close','profit_or_loss', 
+    'rsi_signal_flag', 'price_move_pct_5d', 'price_move_pct_10d', 'price_move_pct_15d']  # Added buy_close and buyexit_close
+    summary_df = summary_df[summary_cols]
+    
+    ###Step4 Save Results
     combined_df.reset_index().to_excel(swing_path2, index=False)  # Include date as a column
     summary_df.to_excel(summary_path, index=False)
-
+    combined_df.reset_index().to_excel(swing_path1, index=False)
     #Backtest Output Summary
-    results_df = backtest_signals(summary_df)
-    results_df.to_excel(backtest_path, index=False)
+    #results_df = backtest_signals(summary_df)
+    #results_df.to_excel(backtest_path, index=False)
     
     print(f"Summary DataFrame created with {len(summary_df)} rows!")
