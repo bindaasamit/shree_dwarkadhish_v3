@@ -30,12 +30,13 @@ from config import cfg_nifty, cfg_vars
 from src.utils import util_funcs
 from src.classes.scanner.cl_Swing_SuperTrend_Strategy import (calculate_supertrend, 
     check_supertrend_flat,
-    detect_strategy_signals,
+    detect_buy_signals,
     read_nse_data,
     process_nse_stocks,
     summarize_signals,
     clamp,
     trend_quality_score,
+    get_weekly_trend,
     backtest_signals)
 
 logger.add(cfg_vars.scanner_log_path, 
@@ -51,8 +52,8 @@ logger.add(cfg_vars.scanner_log_path,
 #--------------------------------------------------------------------------------------------------------------------- 
 # Example usage
 if __name__ == "__main__":
-    sector ='small_mid'  # 'test' / 'movers' / 'fno_sects' / 'small_mid'
-    start_date = '2025-01-01'
+    sector ='all'  # 'test' / 'movers' / 'fno_sects' / 'small_mid' / 'all'
+    start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
 
@@ -66,7 +67,8 @@ if __name__ == "__main__":
         case 'small_mid': nifty_list = cfg_nifty.nifty_mid_small_caps
         case 'movers': nifty_list = cfg_nifty.nifty_movers
         case 'fno_sects': nifty_list = list(set(cfg_nifty.nifty_fno + cfg_nifty.nifty_sectoral))
-        case 'cash': nifty_list = cfg_nifty.nifty_cash  
+        case 'cash': nifty_list = cfg_nifty.nifty_cash
+        case 'all': nifty_list = list(set(cfg_nifty.nifty_fno + cfg_nifty.nifty_sectoral + cfg_nifty.nifty_mid_small_caps))  
         case _: print("Invalid Sector")
     
     
@@ -77,7 +79,6 @@ if __name__ == "__main__":
     all_signals_df = process_nse_stocks(sector, nifty_list, start_date)
     combined_df = pd.concat(all_signals_df, ignore_index=False)
     
-
     ### Step2. Filter to include only rows where flat_period_start, buy_date, or buyexit_date is populated
     combined_df = combined_df[
         (combined_df['flat_period_start'] != '') | 
@@ -103,15 +104,22 @@ if __name__ == "__main__":
     
     ###Step3. Summarize Signals
     summary_df = summarize_signals(combined_df, nifty_list)
+    summary_df['weekly_trend'] = None
+
     summary_cols = ['tckr_symbol', 'flat_period_start', 'flat_period_end', 'trend_score', 'buy_date', 'buyexit_date', 
-    "buy_signal",'buyexit_signal', 'duration_watchlist_to_buy', 'duration_buy_to_buyexit', 
+    "buy_signal",'buyexit_signal', 'weekly_trend','duration_watchlist_to_buy', 'duration_buy_to_buyexit', 
     'price_diff_watchlist_buy', 'profit_or_loss_percent', 'highest_high_flat', 'exit_reason','buy_close', 'buyexit_close','profit_or_loss', 
     'rsi_signal_flag', 'price_move_pct_5d', 'price_move_pct_10d', 'price_move_pct_15d']  # Added buy_close and buyexit_close
     summary_df = summary_df[summary_cols]
+
+    ###Step4. Get Weekly Trend Data for the Identified Buy Signals Only
+    weekly_data_path = cfg_vars.weekly_data_dir + f'stocks_weekly_data.xlsx'
+    summary_df1 = get_weekly_trend(summary_df,weekly_data_path)
     
+
     ###Step4 Save Results
     combined_df.reset_index().to_excel(swing_path2, index=False)  # Include date as a column
-    summary_df.to_excel(summary_path, index=False)
+    summary_df1.to_excel(summary_path, index=False)
     combined_df.reset_index().to_excel(swing_path1, index=False)
     #Backtest Output Summary
     #results_df = backtest_signals(summary_df)
