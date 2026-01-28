@@ -39,7 +39,7 @@ logger.add(cfg_vars.scanner_log_path,
 
 #------------------------------------------------------------------------------
 
-def calculate_supertrend(df, period=10, multiplier=3):
+def calculate_supertrend(df, period, multiplier):
     """
     Calculate Supertrend indicator
     
@@ -75,7 +75,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['price_move_pct_5d'] = np.ceil(((df['close'].shift(-5) - df['close']) / df['close']) * 100)
     df['price_move_pct_10d'] = np.ceil(((df['close'].shift(-10) - df['close']) / df['close']) * 100)
     df['price_move_pct_15d'] = np.ceil(((df['close'].shift(-15) - df['close']) / df['close']) * 100)
-    
+
     # Initialize final bands
     df['final_ub'] = 0.0
     df['final_lb'] = 0.0
@@ -143,6 +143,91 @@ def check_supertrend_flat(df, start_idx, tolerance=0.001):
     
     return flat_check and slope_check
 
+def calculate_bollinger_bands(df, period=20, std_multiplier=2):
+    """
+    Calculate Bollinger Bands and set volatility_signal based on close price.
+    
+    Parameters:
+    df: DataFrame with 'close' column
+    period: Period for SMA and std (default 20)
+    std_multiplier: Multiplier for standard deviation (default 2)
+    
+    Returns:
+    DataFrame with Bollinger Bands and volatility_signal added
+    """
+    # Calculate middle band (SMA)
+    df['bb_middle'] = df['close'].rolling(window=period).mean()
+    
+    # Calculate standard deviation
+    df['bb_std'] = df['close'].rolling(window=period).std()
+    
+    # Calculate upper and lower bands
+    df['bb_upper'] = df['bb_middle'] + (std_multiplier * df['bb_std'])
+    df['bb_lower'] = df['bb_middle'] - (std_multiplier * df['bb_std'])
+    
+    # Set volatility_signal based on close
+    df['volatility_signal'] = ''
+    for i in range(len(df)):
+        close = df['close'].iloc[i]
+        upper = df['bb_upper'].iloc[i]
+        middle = df['bb_middle'].iloc[i]
+        lower = df['bb_lower'].iloc[i]
+        
+        if pd.notna(upper) and pd.notna(middle) and pd.notna(lower):
+            if close > upper:
+                df.loc[df.index[i], 'volatility_signal'] = 'ignore_sbull'
+            elif middle < close <= upper:
+                df.loc[df.index[i], 'volatility_signal'] = 'healthy_bullish'
+            elif lower <= close <= middle:
+                df.loc[df.index[i], 'volatility_signal'] = 'bearish_bias'
+            elif close < lower:
+                df.loc[df.index[i], 'volatility_signal'] = 'ignore_sbear'
+            #print(f"close={close},upper={upper},middle={middle}, lower={lower}, volatility_signal={df.loc[df.index[i], 'volatility_signal']}")
+    
+    return df
+
+def calculate_pivot_points(df):
+    """
+    Calculate Pivot Points and set pivot_signal based on close price.
+    
+    Parameters:
+    df: DataFrame with 'high', 'low', 'close' columns
+    
+    Returns:
+    DataFrame with Pivot Points and pivot_signal added
+    """
+    # Calculate Pivot Point (PP)
+    df['pp'] = (df['high'] + df['low'] + df['close']) / 3
+    
+    # Calculate R1, S1, R2, S2
+    df['r1'] = 2 * df['pp'] - df['low']
+    df['s1'] = 2 * df['pp'] - df['high']
+    df['r2'] = df['pp'] + (df['high'] - df['low'])
+    df['s2'] = df['pp'] - (df['high'] - df['low'])
+    
+    # Set pivot_signal based on close
+    df['pivot_signal'] = ''
+    for i in range(len(df)):
+        close = df['close'].iloc[i]
+        pp = df['pp'].iloc[i]
+        r1 = df['r1'].iloc[i]
+        s1 = df['s1'].iloc[i]
+        s2 = df['s2'].iloc[i]
+        
+        if pd.notna(pp) and pd.notna(r1) and pd.notna(s1) and pd.notna(s2):
+            if close > r1:
+                df.loc[df.index[i], 'pivot_signal'] = 'strong_bullish'
+            elif pp < close <= r1:
+                df.loc[df.index[i], 'pivot_signal'] = 'healthy_bullish'
+            elif s1 <= close <= pp:
+                df.loc[df.index[i], 'pivot_signal'] = 'weak_bullish'
+            elif s2 < close < s1:
+                df.loc[df.index[i], 'pivot_signal'] = 'weak_bearish'
+            elif close <= s2:
+                df.loc[df.index[i], 'pivot_signal'] = 'strong_bearish'
+    
+    return df
+
 def detect_buy_signals(df, tolerance=0.001):
     """
     Detect buy signals based on the refined strategy.
@@ -179,6 +264,8 @@ def detect_buy_signals(df, tolerance=0.001):
     df['buyexit_date'] = ''  # Date of exit signal
     df['exit_reason'] = ''  # Reason for exit
     df['trend_score'] = np.nan  # Trend quality score for the flat period
+    df['gobuy_flag'] = pd.Series([False] * len(df), dtype=object)  # New flag for gobuy condition
+    df['buy_signal_next_day_high'] = ''  # Buy signal flag
     
     # State variables for tracking across iterations
     current_watchlist_high = None  # Current highest high to break for buy
@@ -193,13 +280,17 @@ def detect_buy_signals(df, tolerance=0.001):
     # Iterate through each row in the DataFrame
     i = 0
     while i < len(df):
+        
+        
         current_direction = df['supertrend_direction'].iloc[i]
         
         # Reset watchlist flag when entering a new GREEN period
         if current_direction == 1 and (i == 0 or df['supertrend_direction'].iloc[i-1] == -1):
             green_period_watchlist_added = False
         
+        #-----------------------------------------------------------------------------------------------------------------------
         # Check for flat period in GREEN direction, only if not already added for this period
+        #-----------------------------------------------------------------------------------------------------------------------
         if current_direction == 1 and not green_period_watchlist_added:
             # Ensure there are at least 5 days ahead
             if i + 5 <= len(df):
@@ -234,8 +325,10 @@ def detect_buy_signals(df, tolerance=0.001):
                         # Skip to end of flat period
                         i = i + 5
                         continue
-        
+        #-----------------------------------------------------------------------------------------------------------------------
         # If watchlist is active, monitor for buy signal or deactivation
+        #-----------------------------------------------------------------------------------------------------------------------
+        # if a stock is identified that its in a watchlist and highhest_high is known then................
         if watchlist_active and current_watchlist_high is not None:
             # Deactivate watchlist if more than 12 days have passed since start
             if i - watchlist_start_idx > 12:
@@ -247,32 +340,47 @@ def detect_buy_signals(df, tolerance=0.001):
             df.loc[df.index[i], 'watchlist_active'] = True
             df.loc[df.index[i], 'highest_high_flat'] = current_watchlist_high
             
+            #------------------------------------------------------ 
             # Check for buy signal: close breaks above highest high
+            #------------------------------------------------------
             if df['close'].iloc[i] > current_watchlist_high:
                 df.loc[df.index[i], 'buy_signal'] = True
                 df.loc[df.index[i], 'buy_date'] = df.index[i].strftime('%Y-%m-%d')
                 position_active = True
                 last_buy_index = i
                 consecutive_ema50_breach = 0  # Reset breach counter
+
+                #get next candle high and low for gobuy flag calculation
+
+                #get previous candle close, high, low for price_move_candle_height calculation
+                if i > 0:  # Ensure there's a previous candle to avoid index error
+                    if i+1 < len(df):
+                        next_date = df.index[i+1]
+                        current_high = df['high'].iloc[i]
+                        current_low = df['low'].iloc[i]
+                        current_close = df['close'].iloc[i]
+                        current_candle_height = current_high - current_low
+                        target_candle_height = current_close + 0.50 * current_candle_height
+
+                        
+                        #next_high = df['high'].iloc[i+1]
+                        #if current_candle_height > 0 and next_high > target_candle_height:
+                        #    df.loc[df.index[i], 'gobuy_flag'] = True
+                        next_close = df['close'].iloc[i+1]
+                        if current_candle_height > 0 and next_close > target_candle_height:
+                            df.loc[df.index[i], 'gobuy_flag'] = True
+                        
+
+                    else:
+                        df.loc[df.index[i], 'gobuy_flag'] = "Wait-4-Tommorow"
+                    #print(f"    next_date, current_high, current_low, current_candle_height, current_close: {next_date}-{current_high}-{current_low}-{current_candle_height}-{current_close}")
+                    #print(f"    ..next_high, target_candle_height, gobuy_flag: {next_high}-{target_candle_height}-{df['gobuy_flag'].iloc[i]}")
+                else:
+                    logger.warning(f"gobuy_flag not set for buy at index {i} due to no previous candle.")
                 
                 # Deactivate watchlist after buy
                 watchlist_active = False
                 current_watchlist_high = None
-
-                # Add:
-                """
-                rsi_current = df['rsi'].iloc[i]
-                rsi_prev1 = df['rsi'].iloc[i-1] if i > 0 else None
-                rsi_prev2 = df['rsi'].iloc[i-2] if i > 1 else None
-                flat_period_rsi = df['rsi'].iloc[watchlist_start_idx:watchlist_start_idx+5]
-                if (pd.notna(rsi_current) and rsi_current >= 60 and
-                    pd.notna(rsi_prev1) and pd.notna(rsi_prev2) and
-                    rsi_current > rsi_prev1 and rsi_prev1 > rsi_prev2 and
-                    all(pd.notna(flat_period_rsi) & (flat_period_rsi >= 50))):
-                    df.loc[df.index[i], 'rsi_signal_flag'] = 'bullish'
-                else:
-                    df.loc[df.index[i], 'rsi_signal_flag'] = ''  # Or leave as default
-                """
                 # In detect_buy_signals, modify the RSI check block:
                 # After setting buy_signal, calculate the gap and set rsi_signal_flag:
                 buy_date = pd.to_datetime(df.index[i])
@@ -286,7 +394,7 @@ def detect_buy_signals(df, tolerance=0.001):
 
                 if gap_days > 15:
                     df.loc[df.index[i], 'rsi_signal_flag'] = 'too_late'
-                elif (pd.notna(rsi_current) and rsi_current >= 60 and
+                elif (pd.notna(rsi_current) and rsi_current >= 55 and
                     pd.notna(rsi_prev1) and pd.notna(rsi_prev2) and
                     rsi_current > rsi_prev1 and rsi_prev1 > rsi_prev2 and
                     all(pd.notna(flat_period_rsi) & (flat_period_rsi >= 50))):
@@ -300,12 +408,14 @@ def detect_buy_signals(df, tolerance=0.001):
                 current_watchlist_high = None
                 green_period_watchlist_added = False
         
+        #-----------------------------------------------------------------------------------------------------------------------
         # If a position is active, monitor for exit signals
+        #-----------------------------------------------------------------------------------------------------------------------
         if position_active:
             df.loc[df.index[i], 'position_active'] = True
             
             reason = None
-            
+            """
             # Exit condition 1: EMA50 breached for 2 consecutive days
             if df['close'].iloc[i] < df['ema50'].iloc[i]:
                 consecutive_ema50_breach += 1
@@ -329,8 +439,22 @@ def detect_buy_signals(df, tolerance=0.001):
                     df.loc[df.index[last_buy_index], 'exit_reason'] = reason
                 position_active = False
                 last_buy_index = None
+                current_trend_score = None            
+            """
+
+            # Exit condition 3: Close price below Supertrend level
+            if df['close'].iloc[i] < df['supertrend'].iloc[i]:
+                reason = 'close below supertrend'
+            
+            # If exit condition met, trigger exit signal
+            if reason:
+                df.loc[df.index[i], 'buyexit_signal'] = True
+                df.loc[df.index[i], 'buyexit_date'] = df.index[i].strftime('%Y-%m-%d')
+                if last_buy_index is not None:
+                    df.loc[df.index[last_buy_index], 'exit_reason'] = reason
+                position_active = False
+                last_buy_index = None
                 current_trend_score = None
-        
         i += 1
     
     return df
@@ -398,7 +522,12 @@ def process_nse_stocks(sector, nifty_list, start_date):
         stock_data = stock_data.set_index('date').sort_index()
 
         # Calculate Supertrend
-        stock_data = calculate_supertrend(stock_data)
+        supertrend_duration = 10
+        supertrend_atr = 1.8
+        
+        stock_data = calculate_supertrend(stock_data, period=supertrend_duration, multiplier=supertrend_atr)
+        stock_data = calculate_bollinger_bands(stock_data, period=20, std_multiplier=2)
+        stock_data = calculate_pivot_points(stock_data)
     
         try:
             # Process one stock at a time using detect_buy_signals
@@ -427,7 +556,7 @@ def process_nse_stocks(sector, nifty_list, start_date):
     
     return all_signals_df  # Returns list of DataFrames, one per stock
 
-def summarize_signals(combined_df, nifty_list):
+def summarize_signals(combined_filtd_df, combined_low_df,nifty_list):
     '''
     Summarize signals DataFrame into a summary DataFrame per stock
     '''
@@ -435,7 +564,7 @@ def summarize_signals(combined_df, nifty_list):
     summary_rows = []
     
     for symbol in nifty_list:
-        stock_df = combined_df[combined_df['symbol'] == symbol]
+        stock_df = combined_filtd_df[combined_filtd_df['symbol'] == symbol]
         stock_df = stock_df.set_index('date').sort_index()  # Set date as index for datetime operations
         unique_flat_starts = stock_df[stock_df['flat_period_start'] != '']['flat_period_start'].unique()
         
@@ -449,7 +578,25 @@ def summarize_signals(combined_df, nifty_list):
             flat_period_start = flat_start
             flat_period_end = group['flat_period_end'].iloc[0]
             watchlist_active = True  # Always True for flat periods
-            
+
+            # Calculate average volume during the flat period
+            flat_start_dt = pd.to_datetime(flat_period_start)
+            flat_end_dt = pd.to_datetime(flat_period_end)
+            flat_rows = combined_low_df[(combined_low_df['date'] >= flat_start_dt) & (combined_low_df['date'] <= flat_end_dt)]
+            #print("flat_rows", flat_rows)
+            avg_vol_flatST = flat_rows['volume'].mean() if not flat_rows.empty else None
+
+            # Calculate average volume of the 5 days before flat_period_start
+            before_rows = combined_low_df[(combined_low_df['tckr_symbol'] == symbol) & (combined_low_df['date'] < flat_start_dt)].tail(5)
+            #print("before_rows", before_rows)
+            avg_vol_before_flatST = before_rows['volume'].mean() if len(before_rows) == 5 else None
+
+            # Set volume_flag
+            if avg_vol_flatST is not None and avg_vol_before_flatST is not None:
+                volume_flag = "increasing" if avg_vol_flatST > avg_vol_before_flatST else "not increasing"
+            else:
+                volume_flag = None
+
             # Find buy signal after flat_period_end
             flat_end_date = pd.to_datetime(flat_period_end)
             subsequent = stock_df[stock_df.index > flat_end_date]
@@ -460,11 +607,53 @@ def summarize_signals(combined_df, nifty_list):
                 buy_date = buy_row['buy_date'].iloc[0]
                 buy_close = buy_row['close'].iloc[0]
                 rsi_signal_flag = buy_row['rsi_signal_flag'].iloc[0] if not buy_row.empty else ''
+                gobuy_flag = buy_row['gobuy_flag'].iloc[0] if 'gobuy_flag' in buy_row.columns else False  # Add this
+
+                #Get lowest low price in next 6 days (using position-based selection) from combined_low_df
+                buy_date_dt = pd.to_datetime(buy_date)
+                low_subsequent = combined_low_df[(combined_low_df['tckr_symbol'] == symbol) & (combined_low_df['date'] > buy_date_dt)]
+                low_subsequent = low_subsequent.set_index('date').sort_index()
+                
+                #Initialize them
+                llowest_low_5d = None
+                pct_to_lowest_5d = None
+                lowest_low_10d = None
+                pct_to_lowest_10d = None
+                lowest_low_15d = None
+                pct_to_lowest_15d = None
+
+                # 5 days
+                next_5_days = low_subsequent.head(6)
+                #print("calculating for 5 days", next_5_days)
+                if not next_5_days.empty:
+                    lowest_low_5d = next_5_days['low'].min()
+                    pct_to_lowest_5d = np.ceil(((lowest_low_5d - buy_close) / buy_close) * 100)
+                
+                # 10 days
+                next_10_days = low_subsequent.head(11)
+                #print("calculating for 10 days", next_10_days)
+                if not next_10_days.empty:
+                    lowest_low_10d = next_10_days['low'].min()
+                    pct_to_lowest_10d = np.ceil(((lowest_low_10d - buy_close) / buy_close) * 100)
+                
+                # 15 days
+                next_15_days = low_subsequent.head(16)
+                #print("calculating for 15 days", next_15_days)
+                if not next_15_days.empty:
+                    lowest_low_15d = next_15_days['low'].min()
+                    pct_to_lowest_15d = np.ceil(((lowest_low_15d - buy_close) / buy_close) * 100)
             else:
                 buy_signal = False
                 buy_date = '9999-12-31'
                 buy_close = None
                 rsi_signal_flag = ''
+                gobuy_flag = False
+                lowest_low_5d = None
+                pct_to_lowest_5d = None
+                lowest_low_10d = None
+                pct_to_lowest_10d = None
+                lowest_low_15d = None
+                pct_to_lowest_15d = None
             
             # Find "buyexit" signal after buy (if buy exists)
             buyexit_row = pd.DataFrame()
@@ -530,10 +719,22 @@ def summarize_signals(combined_df, nifty_list):
                 'profit_or_loss_percent': profit_or_loss_percent,
                 'trend_score': group['trend_score'].iloc[0],  # Add trend_score from the flat period group                
                 'rsi_signal_flag': rsi_signal_flag,
+                'volatility_signal': buy_row['volatility_signal'].iloc[0] if not buy_row.empty and 'volatility_signal' in buy_row.columns else '',
+                'volume_flag': volume_flag,
+                'pivot_signal': buy_row['pivot_signal'].iloc[0] if not buy_row.empty and 'pivot_signal' in buy_row.columns else '',
+                'gobuy_flag': gobuy_flag,
                 'exit_reason': buy_row['exit_reason'].iloc[0] if not buy_row.empty and 'exit_reason' in buy_row.columns else '',  # Safe access                            
                 'price_move_pct_5d': buy_row['price_move_pct_5d'].iloc[0] if not buy_row.empty and 'price_move_pct_5d' in buy_row.columns else np.nan,
                 'price_move_pct_10d': buy_row['price_move_pct_10d'].iloc[0] if not buy_row.empty and 'price_move_pct_10d' in buy_row.columns else np.nan,
-                'price_move_pct_15d': buy_row['price_move_pct_15d'].iloc[0] if not buy_row.empty and 'price_move_pct_15d' in buy_row.columns else np.nan
+                'price_move_pct_15d': buy_row['price_move_pct_15d'].iloc[0] if not buy_row.empty and 'price_move_pct_15d' in buy_row.columns else np.nan,
+                'lowest_low_5d': lowest_low_5d,
+                'pct_to_lowest_5d': pct_to_lowest_5d,
+                'lowest_low_10d': lowest_low_10d,
+                'pct_to_lowest_10d': pct_to_lowest_10d,
+                'lowest_low_15d': lowest_low_15d,
+                'pct_to_lowest_15d': pct_to_lowest_15d,
+                'avg_vol_flatST': avg_vol_flatST,
+                'avg_vol_before_flatST': avg_vol_before_flatST
             }
             summary_rows.append(row)
 

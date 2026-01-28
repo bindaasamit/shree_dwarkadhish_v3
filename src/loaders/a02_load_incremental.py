@@ -207,7 +207,7 @@ def main():
     start_date = '2020-01-01'
     weekly_data_path = cfg_vars.weekly_data_dir + f'stocks_weekly_data.xlsx'
     
-    first_load = 'no'
+    first_load = 'yes'
 
     ###Step1. Load Incremental Data from all files in the directory to Sqlite DB
     if first_load == 'yes':
