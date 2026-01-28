@@ -39,7 +39,7 @@ logger.add(cfg_vars.scanner_log_path,
 
 #------------------------------------------------------------------------------
 
-def calculate_supertrend(df, period, multiplier):
+def calculate_supertrend(df, period=10, multiplier=3):
     """
     Calculate Supertrend indicator
     
@@ -142,6 +142,66 @@ def check_supertrend_flat(df, start_idx, tolerance=0.001):
     slope_check = abs(st_values.iloc[-1] - st_values.iloc[0]) / df['close'].iloc[start_idx + 4] < 0.15 * df['atr14'].iloc[start_idx + 4]
     
     return flat_check and slope_check
+
+def calculate_supertrend_trailing(df, period=10, multiplier=1.8):
+    """
+    Calculate Supertrend indicator for trailing stop loss
+    
+    Parameters:
+    df: DataFrame with 'high', 'low', 'close' columns
+    period: ATR period (default 10)
+    multiplier: ATR multiplier (default 1.8)
+    
+    Returns:
+    DataFrame with supertrend_trailing columns added
+    """
+    # Calculate ATR
+    df['h-l'] = df['high'] - df['low']
+    df['h-pc'] = abs(df['high'] - df['close'].shift(1))
+    df['l-pc'] = abs(df['low'] - df['close'].shift(1))
+    df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
+    df['atr_trailing'] = df['tr'].rolling(window=period).mean()
+    
+    # Calculate basic upper and lower bands
+    df['basic_ub_trailing'] = (df['high'] + df['low']) / 2 + multiplier * df['atr_trailing']
+    df['basic_lb_trailing'] = (df['high'] + df['low']) / 2 - multiplier * df['atr_trailing']
+
+    # Initialize final bands
+    df['final_ub_trailing'] = 0.0
+    df['final_lb_trailing'] = 0.0
+    df['supertrend_trailing'] = 0.0
+    df['supertrend_direction_trailing'] = 0  # 1 for bullish (green), -1 for bearish (red)
+    
+    for i in range(period, len(df)):
+        # Final upper band
+        if df['basic_ub_trailing'].iloc[i] < df['final_ub_trailing'].iloc[i-1] or df['close'].iloc[i-1] > df['final_ub_trailing'].iloc[i-1]:
+            df.loc[df.index[i], 'final_ub_trailing'] = df['basic_ub_trailing'].iloc[i]
+        else:
+            df.loc[df.index[i], 'final_ub_trailing'] = df['final_ub_trailing'].iloc[i-1]
+        
+        # Final lower band
+        if df['basic_lb_trailing'].iloc[i] > df['final_lb_trailing'].iloc[i-1] or df['close'].iloc[i-1] < df['final_lb_trailing'].iloc[i-1]:
+            df.loc[df.index[i], 'final_lb_trailing'] = df['basic_lb_trailing'].iloc[i]
+        else:
+            df.loc[df.index[i], 'final_lb_trailing'] = df['final_lb_trailing'].iloc[i-1]
+        
+        # Supertrend
+        if df['supertrend_trailing'].iloc[i-1] == df['final_ub_trailing'].iloc[i-1]:
+            if df['close'].iloc[i] <= df['final_ub_trailing'].iloc[i]:
+                df.loc[df.index[i], 'supertrend_trailing'] = df['final_ub_trailing'].iloc[i]
+                df.loc[df.index[i], 'supertrend_direction_trailing'] = -1
+            else:
+                df.loc[df.index[i], 'supertrend_trailing'] = df['final_lb_trailing'].iloc[i]
+                df.loc[df.index[i], 'supertrend_direction_trailing'] = 1
+        else:
+            if df['close'].iloc[i] >= df['final_lb_trailing'].iloc[i]:
+                df.loc[df.index[i], 'supertrend_trailing'] = df['final_lb_trailing'].iloc[i]
+                df.loc[df.index[i], 'supertrend_direction_trailing'] = 1
+            else:
+                df.loc[df.index[i], 'supertrend_trailing'] = df['final_ub_trailing'].iloc[i]
+                df.loc[df.index[i], 'supertrend_direction_trailing'] = -1
+    
+    return df
 
 def calculate_bollinger_bands(df, period=20, std_multiplier=2):
     """
@@ -362,19 +422,23 @@ def detect_buy_signals(df, tolerance=0.001):
                         current_candle_height = current_high - current_low
                         target_candle_height = current_close + 0.50 * current_candle_height
 
-                        
                         #next_high = df['high'].iloc[i+1]
                         #if current_candle_height > 0 and next_high > target_candle_height:
                         #    df.loc[df.index[i], 'gobuy_flag'] = True
+                        #else:
+                        #    df.loc[df.index[i], 'gobuy_flag'] = False
+                        
                         next_close = df['close'].iloc[i+1]
                         if current_candle_height > 0 and next_close > target_candle_height:
                             df.loc[df.index[i], 'gobuy_flag'] = True
+                        else:
+                            df.loc[df.index[i], 'gobuy_flag'] = False
                         
 
                     else:
                         df.loc[df.index[i], 'gobuy_flag'] = "Wait-4-Tommorow"
-                    #print(f"    next_date, current_high, current_low, current_candle_height, current_close: {next_date}-{current_high}-{current_low}-{current_candle_height}-{current_close}")
-                    #print(f"    ..next_high, target_candle_height, gobuy_flag: {next_high}-{target_candle_height}-{df['gobuy_flag'].iloc[i]}")
+                    #print(f"   next_date, current_high, current_low, current_candle_height, current_close: {next_date}-{current_high}-{current_low}-{current_candle_height}-{current_close}")
+                    #print(f"   ..next_close, target_candle_height, gobuy_flag: {next_close}-{target_candle_height}-{df['gobuy_flag'].iloc[i]}")
                 else:
                     logger.warning(f"gobuy_flag not set for buy at index {i} due to no previous candle.")
                 
@@ -443,8 +507,9 @@ def detect_buy_signals(df, tolerance=0.001):
             """
 
             # Exit condition 3: Close price below Supertrend level
-            if df['close'].iloc[i] < df['supertrend'].iloc[i]:
-                reason = 'close below supertrend'
+            if df['close'].iloc[i] < df['supertrend_trailing'].iloc[i]:
+                #print (f"Exit triggered at index {i} as close {df['close'].iloc[i]} < supertrend_trailing {df['supertrend_trailing'].iloc[i]}")
+                reason = 'close below supertrend_trailing'
             
             # If exit condition met, trigger exit signal
             if reason:
@@ -521,12 +586,10 @@ def process_nse_stocks(sector, nifty_list, start_date):
         stock_data['date'] = pd.to_datetime(stock_data['date'])
         stock_data = stock_data.set_index('date').sort_index()
 
-        # Calculate Supertrend
-        supertrend_duration = 10
-        supertrend_atr = 1.8
-        
-        stock_data = calculate_supertrend(stock_data, period=supertrend_duration, multiplier=supertrend_atr)
-        stock_data = calculate_bollinger_bands(stock_data, period=20, std_multiplier=2)
+        # Calculate Supertrend, Bollinger Bands, and Pivot Points
+        stock_data = calculate_supertrend(stock_data)
+        stock_data = calculate_supertrend_trailing(stock_data)
+        stock_data = calculate_bollinger_bands(stock_data)
         stock_data = calculate_pivot_points(stock_data)
     
         try:
@@ -724,6 +787,7 @@ def summarize_signals(combined_filtd_df, combined_low_df,nifty_list):
                 'pivot_signal': buy_row['pivot_signal'].iloc[0] if not buy_row.empty and 'pivot_signal' in buy_row.columns else '',
                 'gobuy_flag': gobuy_flag,
                 'exit_reason': buy_row['exit_reason'].iloc[0] if not buy_row.empty and 'exit_reason' in buy_row.columns else '',  # Safe access                            
+                'supertrend_trailing': buy_row['supertrend_trailing'].iloc[0] if not buy_row.empty and 'supertrend_trailing' in buy_row.columns else None,
                 'price_move_pct_5d': buy_row['price_move_pct_5d'].iloc[0] if not buy_row.empty and 'price_move_pct_5d' in buy_row.columns else np.nan,
                 'price_move_pct_10d': buy_row['price_move_pct_10d'].iloc[0] if not buy_row.empty and 'price_move_pct_10d' in buy_row.columns else np.nan,
                 'price_move_pct_15d': buy_row['price_move_pct_15d'].iloc[0] if not buy_row.empty and 'price_move_pct_15d' in buy_row.columns else np.nan,

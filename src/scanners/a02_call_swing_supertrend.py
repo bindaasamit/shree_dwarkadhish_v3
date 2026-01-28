@@ -52,7 +52,7 @@ logger.add(cfg_vars.scanner_log_path,
 #--------------------------------------------------------------------------------------------------------------------- 
 # Example usage
 if __name__ == "__main__":
-    sector ='fno_sects'  # 'test' / 'movers' / 'fno_sects' / 'small_mid' / 'all'
+    sector ='fno'  # 'test' / 'nifty100' / 'fno_movers' / 'small_mid' / 'all'
     start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
@@ -67,13 +67,12 @@ if __name__ == "__main__":
 
     match sector:
         case 'test': nifty_list = cfg_nifty.nifty_test
+        case 'nifty100': nifty_list = list(set(cfg_nifty.nifty_50 + cfg_nifty.nifty_next_50))
+        case 'fno' : nifty_list = cfg_nifty.nifty_fno
+        case 'fno_movers_poly': nifty_list = list(set(cfg_nifty.top_30_fno_swing + cfg_nifty.nifty_movers + cfg_nifty.mono_duopoly_stocks))
         case 'small_mid': nifty_list = cfg_nifty.nifty_mid_small_caps
-        case 'movers': nifty_list = cfg_nifty.nifty_movers
-        case 'fno_sects': nifty_list = list(set(cfg_nifty.nifty_fno + cfg_nifty.nifty_sectoral))
-        case 'cash': nifty_list = cfg_nifty.nifty_cash
-        case 'all': nifty_list = list(set(cfg_nifty.nifty_fno + cfg_nifty.nifty_sectoral + cfg_nifty.nifty_mid_small_caps))  
-        case _: print("Invalid Sector")
-    
+        case 'all': nifty_list = list(set(cfg_nifty.nifty_50 + cfg_nifty.nifty_next_50 + cfg_nifty.top_30_fno_swing + cfg_nifty.nifty_movers + cfg_nifty.nifty_mid_small_caps))  
+        case _: print("Invalid Sector")    
     
     # Sort the list alphabetically
     nifty_list = sorted(nifty_list)
@@ -96,7 +95,7 @@ if __name__ == "__main__":
     'buy_signal',	'buy_date',	'position_active',	'buyexit_signal',	'buyexit_date', 'trend_score',	'rsi', 'rsi_signal_flag',
     'supertrend',	'supertrend_direction', 'final_ub',	'final_lb', 'atr', 'volatility_signal', 'pivot_signal','gobuy_flag',
     'open',	'high',	'low',	'close', 'volume', 'h-l', 'h-pc', 'l-pc', 'tr',	 'atr14', 'basic_ub', 'basic_lb', 'ema20', 'ema50','symbol','exit_reason',
-    'price_move_pct_5d', 'price_move_pct_10d', 'price_move_pct_15d']
+    'price_move_pct_5d', 'price_move_pct_10d', 'price_move_pct_15d','supertrend_trailing']
     combined_filtd_df = combined_filtd_df[comb_ord_cols]
 
     # Recalculate totals after filtering
@@ -110,13 +109,13 @@ if __name__ == "__main__":
     summary_df = summarize_signals(combined_filtd_df, combined_low_df,nifty_list)
     summary_df['weekly_trend'] = None
 
-    summary_cols = ['tckr_symbol',	'buy_date',	'duration_buy_to_buyexit','buyexit_date',	'buy_signal',	'buyexit_signal',
-	'rsi_signal_flag',	'volatility_signal',	'volume_flag',	'pivot_signal',	'gobuy_flag',	'trend_score',	'weekly_trend',	
+    summary_cols = ['tckr_symbol',	'buy_date',	'duration_buy_to_buyexit','buyexit_date',	'buy_signal', 'gobuy_flag',	'buyexit_signal',
+	'rsi_signal_flag',	'volatility_signal',	'volume_flag',	'pivot_signal',	'trend_score',	'weekly_trend',	
     'price_move_pct_5d',	'pct_to_lowest_5d',	'flat_period_start',	'flat_period_end',
     'duration_watchlist_to_buy',	'price_diff_watchlist_buy',
     'profit_or_loss_percent',	'highest_high_flat',	'exit_reason',	'buy_close',	'buyexit_close',
     'price_move_pct_10d',	'price_move_pct_15d',	'lowest_low_5d',	'lowest_low_10d',	
-    'pct_to_lowest_10d',	'lowest_low_15d',	'pct_to_lowest_15d', 'profit_or_loss']  # Added buy_close and buyexit_close
+    'pct_to_lowest_10d',	'lowest_low_15d',	'pct_to_lowest_15d', 'profit_or_loss','supertrend_trailing']  # Added buy_close and buyexit_close
     summary_df = summary_df[summary_cols]
     #Filterout all records where duration_watchlist_to_buy is more than 20 days
     summary_df = summary_df[summary_df['duration_watchlist_to_buy'] <=20]
@@ -126,15 +125,12 @@ if __name__ == "__main__":
     summary_df1 = get_weekly_trend(summary_df,weekly_data_path)    
 
     ###Step4 Save Results
-    #combined_df.reset_index().to_excel(swing_path2, index=False)  # Include date as a column
     summary_df1.to_excel(summary_path, index=False)
+    
     #combined_df.reset_index().to_excel(swing_path1, index=False)
+    #combined_filtd_df.reset_index().to_excel(swing_path2, index=False)  # Include date as a column
     #Backtest Output Summary
     #results_df = backtest_signals(summary_df)
     #results_df.to_excel(backtest_path, index=False)
     
     print(f"Summary DataFrame created with {len(summary_df)} rows!")
-
-
-
-
