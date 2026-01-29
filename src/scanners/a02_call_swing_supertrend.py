@@ -52,7 +52,7 @@ logger.add(cfg_vars.scanner_log_path,
 #--------------------------------------------------------------------------------------------------------------------- 
 # Example usage
 if __name__ == "__main__":
-    sector ='fno'  # 'test' / 'nifty100' / 'fno_movers' / 'small_mid' / 'all'
+    sector ='all'  # 'test' / 'nifty100' / 'fno_movers' / 'small_mid' / 'all'
     start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
@@ -67,11 +67,10 @@ if __name__ == "__main__":
 
     match sector:
         case 'test': nifty_list = cfg_nifty.nifty_test
-        case 'nifty100': nifty_list = list(set(cfg_nifty.nifty_50 + cfg_nifty.nifty_next_50))
+        case 'nifty': nifty_list = list(set(cfg_nifty.nifty100))
         case 'fno' : nifty_list = cfg_nifty.nifty_fno
-        case 'fno_movers_poly': nifty_list = list(set(cfg_nifty.top_30_fno_swing + cfg_nifty.nifty_movers + cfg_nifty.mono_duopoly_stocks))
         case 'small_mid': nifty_list = cfg_nifty.nifty_mid_small_caps
-        case 'all': nifty_list = list(set(cfg_nifty.nifty_50 + cfg_nifty.nifty_next_50 + cfg_nifty.top_30_fno_swing + cfg_nifty.nifty_movers + cfg_nifty.nifty_mid_small_caps))  
+        case 'all': nifty_list = list(set(cfg_nifty.nifty100 + cfg_nifty.nifty_fno))  
         case _: print("Invalid Sector")    
     
     # Sort the list alphabetically
@@ -119,6 +118,18 @@ if __name__ == "__main__":
     summary_df = summary_df[summary_cols]
     #Filterout all records where duration_watchlist_to_buy is more than 20 days
     summary_df = summary_df[summary_df['duration_watchlist_to_buy'] <=20]
+
+    #Check Rejections
+    # View rejections
+    #rejected = summary_df[summary_df['buy_signal_rejected'] == True]
+    #print(rejected[['tckr_symbol', 'rejection_reason', 'position_in_range', 'distance_to_recent_high']])
+    # Should show IDEA/RVNL with reasons like:
+    # - 'too_close_to_resistance'
+    # - High position_in_range (>0.60)
+    
+    # These rejections Would have been profitable]
+    #good_rejected = summary_df[(summary_df['buy_signal_rejected']) & (summary_df['profit_or_loss'] > 0)]
+    #print(good_rejected[['tckr_symbol', 'rejection_reason', 'profit_or_loss']])
 
     ###Step4. Get Weekly Trend Data for the Identified Buy Signals Only
     weekly_data_path = cfg_vars.weekly_data_dir + f'stocks_weekly_data.xlsx'

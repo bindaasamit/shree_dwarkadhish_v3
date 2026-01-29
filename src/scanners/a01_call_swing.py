@@ -156,7 +156,7 @@ def transform_signals(combined_signals_df, filter_date):
 #                                MAIN WORKFLOW
 # ============================================================================
 if __name__ == "__main__":    
-    sector ='fno_sects'  # 'test' / 'movers' / 'fno_sects' / 'cash'
+    sector ='all'  # 'test' / 'nifty100' / 'fno_movers' / 'small_mid' / 'all'
     start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
@@ -167,10 +167,11 @@ if __name__ == "__main__":
 
     match sector:
         case 'test': nifty_list = cfg_nifty.nifty_test
-        case 'movers': nifty_list = cfg_nifty.nifty_movers
-        case 'fno_sects': nifty_list = list(set(cfg_nifty.nifty_fno + cfg_nifty.nifty_sectoral))
-        case 'cash': nifty_list = cfg_nifty.nifty_cash  
-        case _: print("Invalid Sector")
+        case 'nifty': nifty_list = list(set(cfg_nifty.nifty100))
+        case 'fno' : nifty_list = cfg_nifty.nifty_fno
+        case 'small_mid': nifty_list = cfg_nifty.nifty_mid_small_caps
+        case 'all': nifty_list = list(set(cfg_nifty.nifty100 + cfg_nifty.nifty_fno))  
+        case _: print("Invalid Sector") 
     
     # Sort the list alphabetically
     nifty_list = sorted(nifty_list)

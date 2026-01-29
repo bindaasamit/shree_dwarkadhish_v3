@@ -36,7 +36,17 @@ logger.add(cfg_vars.scanner_log_path,
            backtrace=True,  # Include full traceback for exceptions
            diagnose=True)   # Include additional context about the error
 
-
+#------------------------------------------------------------------------------
+# Configuration Constants (add at top of file)
+FLAT_TOLERANCE = 0.002  # Increased from 0.001
+WATCHLIST_DURATION = 7  # Reduced from 12
+MIN_TREND_SCORE = 45  # Minimum acceptable trend quality
+POSITION_THRESHOLD = 0.60  # Max position in range (reject if above)
+MIN_DISTANCE_TO_HIGH = 0.03  # 3% minimum room to recent high
+GOBUY_CANDLE_MULTIPLIER = 0.75  # Increased from 0.50
+VOLUME_CONFIRMATION = 1.2  # Volume must be 20% above average
+LOOKBACK_PRICE_CONTEXT = 20  # Days to look back for price position
+LOOKBACK_RESISTANCE = 30  # Days to look back for resistance
 #------------------------------------------------------------------------------
 
 def calculate_supertrend(df, period=10, multiplier=3):
@@ -113,14 +123,14 @@ def calculate_supertrend(df, period=10, multiplier=3):
     
     return df
 
-def check_supertrend_flat(df, start_idx, tolerance=0.001):
+def check_supertrend_flat(df, start_idx, tolerance=FLAT_TOLERANCE):
     """
-    Check if supertrend is flat for exactly 5 days starting from start_idx
+    IMPROVED: Check if supertrend is flat for exactly 5 days starting from start_idx
     
     Parameters:
     df: DataFrame with supertrend values
     start_idx: Start index position
-    tolerance: Tolerance for flatness check (default 0.001 = 0.1%)
+    tolerance: Tolerance for flatness check (default 0.002 = 0.2%)
     
     Returns:
     Boolean indicating if supertrend is flat for 5 days
@@ -135,11 +145,12 @@ def check_supertrend_flat(df, start_idx, tolerance=0.001):
     if mean_val == 0:
         return False
     
+    # More lenient variation check (0.2% instead of 0.1%)
     variations = abs(st_values - mean_val) / mean_val
     flat_check = all(variations <= tolerance)
     
-    # Additional slope constraint: abs(st[t] - st[t-4]) / close < 0.20 * ATR
-    slope_check = abs(st_values.iloc[-1] - st_values.iloc[0]) / df['close'].iloc[start_idx + 4] < 0.20* df['atr14'].iloc[start_idx + 4]
+    # Stricter slope constraint for quality (0.10 instead of 0.15)
+    slope_check = abs(st_values.iloc[-1] - st_values.iloc[0]) / df['close'].iloc[start_idx + 4] < 0.10 * df['atr14'].iloc[start_idx + 4]
     
     return flat_check and slope_check
 
@@ -288,59 +299,66 @@ def calculate_pivot_points(df):
     
     return df
 
-def detect_buy_signals(df, tolerance=0.001):
+def detect_buy_signals(df, tolerance=FLAT_TOLERANCE):
     """
-    Detect buy signals based on the refined strategy.
-    Assumes df already has Supertrend, RSI, EMAs, and other indicators calculated.
-
-    Detect buy signals based on the refined strategy:
-    1. Supertrend must be GREEN (bullish)
-    2. Within the GREEN period, find exactly 5 consecutive days where supertrend is flat
-    3. Record highest high from those 5 flat period candles
-    4. Generate buy signal when close > highest high (after the flat period)
-    5. After buy signal, remain active until exit conditions are met:
-       - Close < EMA50 for 2 consecutive days
-       - OR (Close < EMA23 for 2 bars AND RSI < 50 AND trend_score < 40)
-    6. Only one watchlist entry per GREEN stretch (first flat period found)
+    IMPROVED: Detect buy signals based on the enhanced strategy with contextual filters.
+    
+    Key Improvements:
+    1. Price position context - rejects consolidations near tops
+    2. Distance to resistance check - ensures upside room
+    3. Volume pattern analysis - distinguishes accumulation from distribution
+    4. Trend quality score filter - only high-quality setups
+    5. Stronger momentum confirmation - volume + price
+    6. Shorter watchlist duration - preserves momentum
+    7. Break-below safety - exits if price breaks flat zone
     
     Parameters:
-    df: DataFrame with OHLC data
-    tolerance: Tolerance for flatness check (default 0.001 = 0.1%)
+    df: DataFrame with OHLC data and indicators
+    tolerance: Tolerance for flatness check
     
     Returns:
     DataFrame with signals added
     """
     
-    # Initialize signal columns for tracking various states and signals
-    df['watchlist'] = False  # Marks the 5-day flat period
-    df['watchlist_active'] = False  # Indicates if watchlist is currently active for buy signal
-    df['highest_high_flat'] = np.nan  # Highest high during the flat period
-    df['flat_period_start'] = ''  # Start date of the flat period
-    df['flat_period_end'] = ''  # End date of the flat period
-    df['buy_signal'] = False  # Buy signal flag
-    df['buy_date'] = ''  # Date of buy signal
-    df['position_active'] = False  # Tracks if a position is open after buy
-    df['buyexit_signal'] = False  # Exit signal flag
-    df['buyexit_date'] = ''  # Date of exit signal
-    df['exit_reason'] = ''  # Reason for exit
-    df['trend_score'] = np.nan  # Trend quality score for the flat period
-    df['gobuy_flag'] = pd.Series([False] * len(df), dtype=object)  # New flag for gobuy condition
-    df['buy_signal_next_day_high'] = ''  # Buy signal flag
+    # Initialize signal columns
+    df['watchlist'] = False
+    df['watchlist_active'] = False
+    df['highest_high_flat'] = np.nan
+    df['flat_period_start'] = ''
+    df['flat_period_end'] = ''
+    df['buy_signal'] = False
+    df['buy_date'] = ''
+    df['position_active'] = False
+    df['buyexit_signal'] = False
+    df['buyexit_date'] = ''
+    df['exit_reason'] = ''
+    df['trend_score'] = np.nan
+    df['gobuy_flag'] = pd.Series([False] * len(df), dtype=object)
+    df['buy_signal_next_day_high'] = ''
     
-    # State variables for tracking across iterations
-    current_watchlist_high = None  # Current highest high to break for buy
-    watchlist_active = False  # Whether watchlist is active
-    position_active = False  # Whether a position is currently open
-    watchlist_start_idx = None  # Index where watchlist started
-    green_period_watchlist_added = False  # Ensures only one watchlist per green period
-    last_buy_index = None  # Index of the last buy signal
-    current_trend_score = None  # Trend score for current position
-    consecutive_ema50_breach = 0  # Counter for consecutive EMA50 breaches
+    # NEW: Additional tracking columns
+    df['position_in_range'] = np.nan
+    df['distance_to_recent_high'] = np.nan
+    df['buy_signal_rejected'] = False
+    df['rejection_reason'] = ''
+    df['watchlist_expired'] = False
+    df['watchlist_broken_below'] = False
+    df['volume_pattern'] = ''
     
-    # Iterate through each row in the DataFrame
+    # State variables
+    current_watchlist_high = None
+    watchlist_active = False
+    position_active = False
+    watchlist_start_idx = None
+    green_period_watchlist_added = False
+    last_buy_index = None
+    current_trend_score = None
+    consecutive_ema50_breach = 0
+    flat_zone_low = None  # NEW: Track flat zone low for safety
+    
+    # Iterate through each row
     i = 0
     while i < len(df):
-        
         
         current_direction = df['supertrend_direction'].iloc[i]
         
@@ -349,167 +367,248 @@ def detect_buy_signals(df, tolerance=0.001):
             green_period_watchlist_added = False
         
         #-----------------------------------------------------------------------------------------------------------------------
-        # Check for flat period in GREEN direction, only if not already added for this period
+        # IMPROVED: Check for flat period with multiple quality filters
         #-----------------------------------------------------------------------------------------------------------------------
         if current_direction == 1 and not green_period_watchlist_added:
-            # Ensure there are at least 5 days ahead
             if i + 5 <= len(df):
                 # Verify next 5 days are all GREEN
                 next_5_directions = df['supertrend_direction'].iloc[i:i+5]
                 if all(next_5_directions == 1):
-                    # Check if the Supertrend is flat over these 5 days
+                    # Check if the Supertrend is flat
                     if check_supertrend_flat(df, i, tolerance):
-                        # Calculate trend quality score for the flat window
+                        
+                        # NEW FILTER 1: Price Position Context
+                        # ============================================
+                        position_ratio = 0.5  # Default mid-range
+                        if i >= LOOKBACK_PRICE_CONTEXT:
+                            recent_high = df['high'].iloc[i-LOOKBACK_PRICE_CONTEXT:i+5].max()
+                            recent_low = df['low'].iloc[i-LOOKBACK_PRICE_CONTEXT:i+5].min()
+                            flat_midpoint = df['close'].iloc[i:i+5].mean()
+                            
+                            if recent_high > recent_low:
+                                position_ratio = (flat_midpoint - recent_low) / (recent_high - recent_low)
+                            
+                            # REJECT if flat period is too high in range
+                            if position_ratio > POSITION_THRESHOLD:
+                                logger.debug(f"{df.index[i]}: Rejected - flat at {position_ratio:.2%} of range (threshold: {POSITION_THRESHOLD:.2%})")
+                                i += 1
+                                continue
+                        
+                        # NEW FILTER 2: Volume Pattern During Flat
+                        # ============================================
+                        flat_volumes = df['volume'].iloc[i:i+5]
+                        avg_vol_flat = flat_volumes.mean()
+                        
+                        if i >= 5:
+                            before_flat_volumes = df['volume'].iloc[i-5:i]
+                            avg_vol_before = before_flat_volumes.mean()
+                            
+                            # REJECT if volume is increasing (distribution pattern)
+                            if avg_vol_flat > avg_vol_before * 1.1:
+                                logger.debug(f"{df.index[i]}: Rejected - increasing volume during flat (distribution)")
+                                df.loc[df.index[i:i+5], 'volume_pattern'] = 'distribution'
+                                i += 1
+                                continue
+                            
+                            # REJECT if volume is too low (no interest)
+                            if avg_vol_flat < avg_vol_before * 0.5:
+                                logger.debug(f"{df.index[i]}: Rejected - very low volume during flat")
+                                df.loc[df.index[i:i+5], 'volume_pattern'] = 'too_low'
+                                i += 1
+                                continue
+                            
+                            df.loc[df.index[i:i+5], 'volume_pattern'] = 'accumulation'
+                        
+                        # Calculate trend quality score
                         flat_window = df.iloc[:i+5]
                         score = trend_quality_score(flat_window)
+                        
+                        # NEW FILTER 3: Trend Quality Score
+                        # ============================================
+                        if score < MIN_TREND_SCORE:
+                            logger.debug(f"{df.index[i]}: Rejected - trend score {score:.1f} below minimum {MIN_TREND_SCORE}")
+                            i += 1
+                            continue
+                        
                         current_trend_score = score
                         
-                        # Identify the highest high in the flat period
+                        # All filters passed - mark flat period
                         flat_period_data = df.iloc[i:i+5]
                         watchlist_high = flat_period_data['high'].max()
+                        flat_zone_low = flat_period_data['low'].min()  # NEW: Store for safety check
                         
-                        # Mark the flat period in the DataFrame
+                        # Mark the flat period
                         for j in range(i, i+5):
                             df.loc[df.index[j], 'watchlist'] = True
                             df.loc[df.index[j], 'highest_high_flat'] = watchlist_high
                             df.loc[df.index[j], 'flat_period_start'] = df.index[i].strftime('%Y-%m-%d')
                             df.loc[df.index[j], 'flat_period_end'] = df.index[i+4].strftime('%Y-%m-%d')
                             df.loc[df.index[j], 'trend_score'] = score
+                            df.loc[df.index[j], 'position_in_range'] = position_ratio
                         
-                        # Activate watchlist for monitoring buy signals
+                        # Activate watchlist
                         current_watchlist_high = watchlist_high
                         watchlist_active = True
                         green_period_watchlist_added = True
                         watchlist_start_idx = i
                         
+                        logger.info(f"{df.index[i]}: Flat period detected - Score: {score:.1f}, Position: {position_ratio:.2%}")
+                        
                         # Skip to end of flat period
                         i = i + 5
                         continue
+        
         #-----------------------------------------------------------------------------------------------------------------------
-        # If watchlist is active, monitor for buy signal or deactivation
+        # IMPROVED: Monitor watchlist with enhanced safety checks
         #-----------------------------------------------------------------------------------------------------------------------
-        # if a stock is identified that its in a watchlist and highhest_high is known then................
         if watchlist_active and current_watchlist_high is not None:
-            # Deactivate watchlist if more than 12 days have passed since start
-            if i - watchlist_start_idx > 12:
+            
+            # NEW: Shorter watchlist duration (7 days instead of 12)
+            if i - watchlist_start_idx > WATCHLIST_DURATION:
                 watchlist_active = False
                 current_watchlist_high = None
+                flat_zone_low = None
+                df.loc[df.index[i], 'watchlist_expired'] = True
+                logger.debug(f"{df.index[i]}: Watchlist expired after {WATCHLIST_DURATION} days")
+                i += 1
+                continue
+            
+            # NEW: Deactivate if price breaks below flat zone low
+            if flat_zone_low is not None and df['close'].iloc[i] < flat_zone_low:
+                watchlist_active = False
+                current_watchlist_high = None
+                flat_zone_low = None
+                df.loc[df.index[i], 'watchlist_broken_below'] = True
+                logger.debug(f"{df.index[i]}: Watchlist cancelled - price broke below flat zone")
+                i += 1
                 continue
             
             # Mark current row as watchlist active
             df.loc[df.index[i], 'watchlist_active'] = True
             df.loc[df.index[i], 'highest_high_flat'] = current_watchlist_high
             
-            #------------------------------------------------------ 
-            # Check for buy signal: close breaks above highest high
-            #------------------------------------------------------
+            #-----------------------------------------------------------------------------------------------------------------------
+            # IMPROVED: Check for buy signal with distance-to-resistance filter
+            #-----------------------------------------------------------------------------------------------------------------------
             if df['close'].iloc[i] > current_watchlist_high:
+                
+                # NEW FILTER 4: Distance to Recent High
+                # ============================================
+                if i >= LOOKBACK_RESISTANCE:
+                    recent_peak = df['high'].iloc[i-LOOKBACK_RESISTANCE:i].max()
+                    current_close = df['close'].iloc[i]
+                    distance_to_peak = (recent_peak - current_close) / current_close
+                    
+                    # REJECT if too close to resistance (less than 3% upside)
+                    if distance_to_peak < MIN_DISTANCE_TO_HIGH:
+                        df.loc[df.index[i], 'buy_signal_rejected'] = True
+                        df.loc[df.index[i], 'rejection_reason'] = f'too_close_to_resistance_{distance_to_peak:.1%}'
+                        df.loc[df.index[i], 'distance_to_recent_high'] = distance_to_peak
+                        
+                        logger.debug(f"{df.index[i]}: Buy rejected - only {distance_to_peak:.1%} to recent high")
+                        
+                        # Deactivate watchlist
+                        watchlist_active = False
+                        current_watchlist_high = None
+                        flat_zone_low = None
+                        i += 1
+                        continue
+                    
+                    df.loc[df.index[i], 'distance_to_recent_high'] = distance_to_peak
+                
+                # All filters passed - generate buy signal
                 df.loc[df.index[i], 'buy_signal'] = True
                 df.loc[df.index[i], 'buy_date'] = df.index[i].strftime('%Y-%m-%d')
                 position_active = True
                 last_buy_index = i
-                consecutive_ema50_breach = 0  # Reset breach counter
-
-                #get next candle high and low for gobuy flag calculation
-
-                #get previous candle close, high, low for price_move_candle_height calculation
-                if i > 0:  # Ensure there's a previous candle to avoid index error
+                consecutive_ema50_breach = 0
+                
+                # IMPROVED: Stronger momentum confirmation (gobuy_flag)
+                # ============================================
+                if i > 0:
                     if i+1 < len(df):
-                        next_date = df.index[i+1]
                         current_high = df['high'].iloc[i]
                         current_low = df['low'].iloc[i]
                         current_close = df['close'].iloc[i]
                         current_candle_height = current_high - current_low
-                        target_candle_height = current_close + 0.50 * current_candle_height
-
-                        #next_high = df['high'].iloc[i+1]
-                        #if current_candle_height > 0 and next_high > target_candle_height:
-                        #    df.loc[df.index[i], 'gobuy_flag'] = True
-                        #else:
-                        #    df.loc[df.index[i], 'gobuy_flag'] = False
+                        
+                        # Higher threshold for target
+                        target_candle_height = current_close + GOBUY_CANDLE_MULTIPLIER * current_candle_height
                         
                         next_close = df['close'].iloc[i+1]
-                        if current_candle_height > 0 and next_close > target_candle_height:
+                        next_volume = df['volume'].iloc[i+1]
+                        
+                        # Calculate average volume
+                        if i >= 10:
+                            avg_volume_10d = df['volume'].iloc[i-10:i].mean()
+                        else:
+                            avg_volume_10d = df['volume'].iloc[:i].mean() if i > 0 else 1
+                        
+                        # Both price AND volume must confirm
+                        if (current_candle_height > 0 and 
+                            next_close > target_candle_height and 
+                            next_volume > VOLUME_CONFIRMATION * avg_volume_10d):
                             df.loc[df.index[i], 'gobuy_flag'] = True
+                            logger.info(f"{df.index[i]}: BUY SIGNAL - Strong momentum confirmed")
                         else:
                             df.loc[df.index[i], 'gobuy_flag'] = False
-                        
-
+                            logger.info(f"{df.index[i]}: BUY SIGNAL - Weak momentum (gobuy=False)")
                     else:
-                        df.loc[df.index[i], 'gobuy_flag'] = "Wait-4-Tommorow"
-                    #print(f"   next_date, current_high, current_low, current_candle_height, current_close: {next_date}-{current_high}-{current_low}-{current_candle_height}-{current_close}")
-                    #print(f"   ..next_close, target_candle_height, gobuy_flag: {next_close}-{target_candle_height}-{df['gobuy_flag'].iloc[i]}")
+                        df.loc[df.index[i], 'gobuy_flag'] = "Wait-4-Tomorrow"
                 else:
                     logger.warning(f"gobuy_flag not set for buy at index {i} due to no previous candle.")
                 
                 # Deactivate watchlist after buy
                 watchlist_active = False
                 current_watchlist_high = None
-                # In detect_buy_signals, modify the RSI check block:
-                # After setting buy_signal, calculate the gap and set rsi_signal_flag:
+                flat_zone_low = None
+                
+                # RSI signal flag (existing logic)
                 buy_date = pd.to_datetime(df.index[i])
                 flat_end_date = pd.to_datetime(df.index[watchlist_start_idx + 4])
                 gap_days = (buy_date - flat_end_date).days
-
+                
                 rsi_current = df['rsi'].iloc[i]
                 rsi_prev1 = df['rsi'].iloc[i-1] if i > 0 else None
                 rsi_prev2 = df['rsi'].iloc[i-2] if i > 1 else None
                 flat_period_rsi = df['rsi'].iloc[watchlist_start_idx:watchlist_start_idx+5]
-
-                if gap_days > 15:
+                
+                # Simplified RSI logic
+                if gap_days > 10:  # Reduced from 15
                     df.loc[df.index[i], 'rsi_signal_flag'] = 'too_late'
-                elif (pd.notna(rsi_current) and rsi_current >= 55 and
-                    pd.notna(rsi_prev1) and pd.notna(rsi_prev2) and
-                    rsi_current > rsi_prev1 and rsi_prev1 > rsi_prev2 and
-                    all(pd.notna(flat_period_rsi) & (flat_period_rsi >= 50))):
+                elif (pd.notna(rsi_current) and rsi_current >= 55):
                     df.loc[df.index[i], 'rsi_signal_flag'] = 'bullish'
                 else:
                     df.loc[df.index[i], 'rsi_signal_flag'] = ''
-
+            
             # Deactivate watchlist if Supertrend turns RED
             elif current_direction == -1:
                 watchlist_active = False
                 current_watchlist_high = None
+                flat_zone_low = None
                 green_period_watchlist_added = False
         
         #-----------------------------------------------------------------------------------------------------------------------
-        # If a position is active, monitor for exit signals
+        # Exit monitoring (existing logic with minor improvements)
         #-----------------------------------------------------------------------------------------------------------------------
         if position_active:
             df.loc[df.index[i], 'position_active'] = True
             
             reason = None
-            """
-            # Exit condition 1: EMA50 breached for 2 consecutive days
-            if df['close'].iloc[i] < df['ema50'].iloc[i]:
-                consecutive_ema50_breach += 1
-            else:
-                consecutive_ema50_breach = 0
             
-            if consecutive_ema50_breach >= 2:
-                reason = 'ema50 breached for 2 consecutive days'
+            # Optional: Add profit target exit
+            if last_buy_index is not None:
+                entry_price = df['close'].iloc[last_buy_index]
+                current_price = df['close'].iloc[i]
+                gain_pct = (current_price - entry_price) / entry_price
+                
+                # Take profit at 15% gain
+                if gain_pct > 0.15:
+                    reason = 'profit_target_reached_15pct'
             
-            # Exit condition 2: Early exit based on RSI, high, and ATR
-            if (df['rsi'].iloc[i] < 50 and 
-                df['high'].iloc[i] < df['high'].iloc[i-1] and 
-                df['atr14'].iloc[i] < df['atr14'].iloc[i-1] < df['atr14'].iloc[i-2]):
-                reason = 'early exit: RSI <50, lower high, ATR contracting'
-            
-            # If exit condition met, trigger exit signal
-            if reason:
-                df.loc[df.index[i], 'buyexit_signal'] = True
-                df.loc[df.index[i], 'buyexit_date'] = df.index[i].strftime('%Y-%m-%d')
-                if last_buy_index is not None:
-                    df.loc[df.index[last_buy_index], 'exit_reason'] = reason
-                position_active = False
-                last_buy_index = None
-                current_trend_score = None            
-            """
-
-            # Exit condition 3: Close price below Supertrend level
+            # Exit condition: Close price below Supertrend trailing
             if df['close'].iloc[i] < df['supertrend_trailing'].iloc[i]:
-                #print (f"Exit triggered at index {i} as close {df['close'].iloc[i]} < supertrend_trailing {df['supertrend_trailing'].iloc[i]}")
-                reason = 'close below supertrend_trailing'
+                reason = 'close_below_supertrend_trailing'
             
             # If exit condition met, trigger exit signal
             if reason:
@@ -520,6 +619,9 @@ def detect_buy_signals(df, tolerance=0.001):
                 position_active = False
                 last_buy_index = None
                 current_trend_score = None
+                
+                logger.info(f"{df.index[i]}: EXIT SIGNAL - Reason: {reason}")
+        
         i += 1
     
     return df
@@ -798,7 +900,8 @@ def summarize_signals(combined_filtd_df, combined_low_df,nifty_list):
                 'lowest_low_15d': lowest_low_15d,
                 'pct_to_lowest_15d': pct_to_lowest_15d,
                 'avg_vol_flatST': avg_vol_flatST,
-                'avg_vol_before_flatST': avg_vol_before_flatST
+                'avg_vol_before_flatST': avg_vol_before_flatST,
+                'buy_signal_rejected': not buy_signal   #Amit
             }
             summary_rows.append(row)
 
