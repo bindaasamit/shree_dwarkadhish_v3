@@ -102,11 +102,14 @@ def transform_forex_data(df):
     # Extract year, month, week from date_ist
     df['year'] = df['date_ist'].dt.year
     df['month'] = df['date_ist'].dt.month
-    df['week'] = df['date_ist'].dt.isocalendar().week        
+    df['day_of_week'] = df['date_ist'].dt.day_name()  # Changed from week        
+
+    # Add candle_flag column
+    df['candle_flag'] = df.apply(lambda row: 'bullish' if row['open'] < row['close'] else 'bearish', axis=1)
 
        # Reorder columns
-    order_cols = ['date_gmt', 'date_est', 'date_ist', 'year', 'month', 'week', 'daylight_savings', 'open', 'low', 'high','close', 
-    'volume']
+    order_cols = ['date_gmt', 'date_est', 'date_ist', 'year', 'month', 'day_of_week', 'daylight_savings', 'open', 'low', 'high','close', 
+    'volume','candle_flag']
     #,'entry_price','target_price','stop_loss_price','success_flag']
     df = df[order_cols]
     return df
@@ -123,6 +126,8 @@ def parse_forex_records(df):
     df['comments'] = None
     df['success_flag'] = None
     df['risk_reward'] = None
+    df['volume_signal'] = None  # New column
+    rr2_flag = "no"  # Set to "no" for RR 1:1, "yes" for RR 1:2
 
     # Initialize batch variables
     batch_close = None
@@ -180,15 +185,41 @@ def parse_forex_records(df):
                         pass  # Move to next record
                     elif row['low'] < LQP and row['high'] < HQP:
                         entry_price = LQP
-                        target_price = entry_price - 0.250
+                        if rr2_flag == "no":
+                            target_price = entry_price - 0.250
+                        else:
+                            target_price = entry_price - 2*(0.250)
                         stop_loss_price = entry_price + 0.250
+                        # Set volume_signal
+                        max_vol_prior = df.loc[batch_start_idx:idx-1, 'volume'].max() if idx > batch_start_idx else 0
+                        if row['volume'] > max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'increasing'
+                        elif row['volume'] < max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'decreasing'
                         df.at[idx, 'entry_price'] = entry_price
                         df.at[idx, 'target_price'] = target_price
                         df.at[idx, 'stop_loss_price'] = stop_loss_price
                     elif LQP < row['low'] and HQP < row['high']:
                         entry_price = HQP
-                        target_price = entry_price - 0.250
-                        stop_loss_price = entry_price + 0.250
+                        # Set volume_signal
+                        max_vol_prior = df.loc[batch_start_idx:idx-1, 'volume'].max() if idx > batch_start_idx else 0
+                        if row['volume'] > max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'increasing'
+                        elif row['volume'] < max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'decreasing'
+
+                        if df.at[idx, 'volume_signal'] == 'decreasing':
+                            if rr2_flag == "no":
+                                target_price = entry_price - 0.250
+                            else:
+                                target_price = entry_price - 2*(0.250)
+                            stop_loss_price = entry_price + 0.250
+                        else:
+                            if rr2_flag == "no":
+                                target_price = entry_price + 0.250
+                            else:
+                                target_price = entry_price + 2*(0.250)
+                            stop_loss_price = entry_price - 0.250
                         df.at[idx, 'entry_price'] = entry_price
                         df.at[idx, 'target_price'] = target_price
                         df.at[idx, 'stop_loss_price'] = stop_loss_price
@@ -199,14 +230,42 @@ def parse_forex_records(df):
                         pass  # Move to next record
                     elif row['low'] < LQP and row['high'] < HQP:
                         entry_price = LQP
-                        target_price = entry_price + 0.250
-                        stop_loss_price = entry_price - 0.250
+                        # Set volume_signal
+                        max_vol_prior = df.loc[batch_start_idx:idx-1, 'volume'].max() if idx > batch_start_idx else 0
+                        if row['volume'] > max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'increasing'
+                        elif row['volume'] < max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'decreasing'
+
+                        if df.at[idx, 'volume_signal'] == 'increasing':
+                            if rr2_flag == "no":
+                                target_price = entry_price + 0.250
+                            else:
+                                target_price = entry_price + 2*(0.250)
+                            stop_loss_price = entry_price - 0.250
+                        else:
+                            if rr2_flag == "no":
+                                target_price = entry_price - 0.250
+                            else:
+                                target_price = entry_price - 2*(0.250)
+                            stop_loss_price = entry_price + 0.250
+
                         df.at[idx, 'entry_price'] = entry_price
                         df.at[idx, 'target_price'] = target_price
                         df.at[idx, 'stop_loss_price'] = stop_loss_price
                     elif LQP < row['low'] and HQP < row['high']:
                         entry_price = HQP
-                        target_price = entry_price + 0.250
+                        
+                        # Set volume_signal
+                        max_vol_prior = df.loc[batch_start_idx:idx-1, 'volume'].max() if idx > batch_start_idx else 0
+                        if row['volume'] > max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'increasing'
+                        elif row['volume'] < max_vol_prior:
+                            df.at[idx, 'volume_signal'] = 'decreasing'
+                        if rr2_flag == "no":
+                            target_price = entry_price + 0.250
+                        else:
+                            target_price = entry_price + 2*(0.250)
                         stop_loss_price = entry_price - 0.250
                         df.at[idx, 'entry_price'] = entry_price
                         df.at[idx, 'target_price'] = target_price
@@ -224,7 +283,10 @@ def parse_forex_records(df):
                         pass
                     elif row['low'] < target_price and row['high'] < stop_loss_price:
                         df.at[idx, 'success_flag'] = 'pass'
-                        df.at[idx, 'risk_reward'] = 1
+                        if rr2_flag == "no":
+                            df.at[idx, 'risk_reward'] = 1
+                        else:
+                            df.at[idx, 'risk_reward'] = 2
                         batch_completed = True
                     elif target_price < row['low'] and stop_loss_price < row['high']:
                         df.at[idx, 'success_flag'] = 'fail'
@@ -241,7 +303,10 @@ def parse_forex_records(df):
                         batch_completed = True
                     elif stop_loss_price < row['low'] and target_price < row['high']:
                         df.at[idx, 'success_flag'] = 'pass'
-                        df.at[idx, 'risk_reward'] = 1
+                        if rr2_flag == "no":
+                            df.at[idx, 'risk_reward'] = 1
+                        else:
+                            df.at[idx, 'risk_reward'] = 2
                         batch_completed = True
                     elif row['low'] < stop_loss_price and target_price < row['high']:
                         pass
@@ -257,10 +322,10 @@ def parse_forex_records(df):
     df = df[df['group_date'].notna()]
 
     # Update order_cols to include new columns
-    order_cols = ['date_gmt', 'date_est', 'date_ist', 'daylight_savings', 'year', 'month', 'week',
-                'open', 'low', 'high', 'close', 'volume', 
+    order_cols = ['date_gmt', 'date_est', 'date_ist', 'daylight_savings', 'year', 'month', 'day_of_week',
+                'open', 'low', 'high', 'close', 'volume', 'candle_flag',
                 'group_date', 'direction', 'LQP', 'HQP', 
-                'entry_price', 'target_price', 'stop_loss_price',  
+                'entry_price', 'target_price', 'stop_loss_price', 'volume_signal',
                 'success_flag', 'risk_reward','comments']
     df = df[order_cols]
     return df
@@ -295,6 +360,27 @@ def main():
         forex_results_df['date_ist'] = forex_results_df['date_ist'].dt.tz_localize(None)
 
     forex_results_df.to_excel('C:/Users/Amit/Downloads/Abhishek/RR2_Forex_Historical_Results.xlsx', index=False)
+
+    # Create summary DataFrame: one row per group_date
+    if not forex_results_df.empty:
+        summary_df = forex_results_df.dropna(subset=['group_date']).groupby('group_date').apply(lambda g: pd.Series({
+            'day_of_week': g['day_of_week'].dropna().iloc[0] if not g['day_of_week'].dropna().empty else None,  # Added
+            'direction': g['direction'].dropna().iloc[0] if not g['direction'].dropna().empty else None,
+            'LQP': g['LQP'].dropna().iloc[0] if not g['LQP'].dropna().empty else None,
+            'HQP': g['HQP'].dropna().iloc[0] if not g['HQP'].dropna().empty else None,
+            'entry_price': g['entry_price'].dropna().iloc[0] if not g['entry_price'].dropna().empty else None,
+            'target_price': g['target_price'].dropna().iloc[0] if not g['target_price'].dropna().empty else None,
+            'stop_loss_price': g['stop_loss_price'].dropna().iloc[0] if not g['stop_loss_price'].dropna().empty else None,
+            'volume_signal': g['volume_signal'].dropna().iloc[0] if not g['volume_signal'].dropna().empty else None,
+            'success_flag': g['success_flag'].dropna().iloc[0] if not g['success_flag'].dropna().empty else None,
+            'risk_reward': g['risk_reward'].dropna().iloc[0] if not g['risk_reward'].dropna().empty else None,
+            'comments': g['comments'].dropna().iloc[0] if not g['comments'].dropna().empty else None,
+        })).reset_index()
+
+        summary_df.to_excel('C:/Users/Amit/Downloads/Abhishek/RR2_Forex_Summary_Results.xlsx', index=False)
+        print(f"Summary results saved to RR2_Forex_Summary_Results.xlsx with {len(summary_df)} rows.")
+    else:
+        print("No data to summarize.")
 
 # ============================================================================
 #                                MAIN WORKFLOW

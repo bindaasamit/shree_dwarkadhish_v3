@@ -1,3 +1,4 @@
+
 #------------------------------------------------------------------------------
 ###            Import Packages
 #------------------------------------------------------------------------------
@@ -358,62 +359,55 @@ class DataLoader:
             raise Exception(f"Error loading data for {symbol}: {str(e)}")
     
     @staticmethod
-    def convert_to_weekly(symbol: str) -> pd.DataFrame:
+    def convert_to_weekly(daily_df: pd.DataFrame) -> pd.DataFrame:
         """
-        Read pre-calculated weekly data from Excel file for a specific symbol.
+        Convert daily OHLCV data to weekly timeframe.
         
-        Loads weekly OHLCV data from the Excel file, filters by symbol,
-        selects the required columns, and renames them to standard format.
+        Weekly bars are created by aggregating daily data:
+        - Open: First day's open of the week
+        - High: Highest high of the week
+        - Low: Lowest low of the week
+        - Close: Last day's close of the week
+        - Volume: Sum of all daily volume for the week
+        
+        Weeks are defined as ending on Friday (or last trading day of week).
         
         Args:
-            symbol: Stock ticker symbol (e.g., 'AAPL', 'MSFT')
+            daily_df: DataFrame with daily OHLCV data
         
         Returns:
-            DataFrame with weekly OHLCV data (fewer rows than daily)
-            Columns: open, high, low, close, volume
-            Index: DatetimeIndex with dates
+            DataFrame with weekly OHLCV data (fewer rows than input)
+        
+        Note:
+            The 'W' frequency in pandas resamples to week-end (Sunday).
+            This works for stock data because it groups Mon-Fri together.
         
         Example:
-            >>> weekly_data = convert_to_weekly('AAPL')
-            >>> print(f"Loaded {len(weekly_data)} weeks for AAPL")
+            >>> daily_data = load_stock_data('AAPL', '1y')  # 252 trading days
+            >>> weekly_data = convert_to_weekly(daily_data)  # ~52 weeks
+            >>> print(f"Converted {len(daily_data)} days to {len(weekly_data)} weeks")
         """
-        try:
-            # Path to the Excel file
-            excel_path = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/weekly_data/stocks_weekly_data.xlsx'
-            
-            # Read the Excel file
-            df = pd.read_excel(excel_path)
-            
-            # Filter by symbol
-            df = df[df['symbol'] == symbol]
-            
-            if df.empty:
-                raise ValueError(f"No weekly data found for symbol {symbol}")
-            
-            # Select only the required columns
-            df = df[['date', 'w_open', 'w_high', 'w_low', 'w_close', 'w_volume']]
-            
-            # Rename columns
-            df.rename(columns={
-                'w_open': 'open',
-                'w_high': 'high',
-                'w_low': 'low',
-                'w_close': 'close',
-                'w_volume': 'volume'
-            }, inplace=True)
-            
-            # Convert date to datetime and set as index
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
-            
-            # Sort by date (in case not sorted)
-            df.sort_index(inplace=True)
-            
-            return df
+        # Create empty DataFrame to hold weekly data
+        weekly = pd.DataFrame()
         
-        except Exception as e:
-            raise Exception(f"Error loading weekly data for {symbol}: {str(e)}")
-
+        # Resample to weekly frequency ('W')
+        # first() = take first value of the week (Monday's open)
+        weekly['open'] = daily_df['open'].resample('W').first()
+        
+        # max() = highest value during the week
+        weekly['high'] = daily_df['high'].resample('W').max()
+        
+        # min() = lowest value during the week
+        weekly['low'] = daily_df['low'].resample('W').min()
+        
+        # last() = take last value of the week (Friday's close)
+        weekly['close'] = daily_df['close'].resample('W').last()
+        
+        # sum() = total volume for the entire week
+        weekly['volume'] = daily_df['volume'].resample('W').sum()
+        
+        # Remove any rows with NaN values (can occur at edges)
+        return weekly.dropna()
 
 # ============================================================================
 # TECHNICAL INDICATORS
@@ -986,8 +980,7 @@ class ContractionDetector:
             # Too deep (> 30%) = not a VCP contraction, more like a correction
             if 2.0 < depth_percent < 30.0:
                 # Extract data for this contraction period
-                low_pos = df.index.get_loc(low_idx)
-                contraction_segment = df.iloc[high_idx: low_pos + 1]
+                contraction_segment = df.loc[high_idx:low_idx]
                 
                 # Calculate average metrics during the contraction
                 avg_volume = contraction_segment['volume'].mean()
@@ -1133,15 +1126,52 @@ class ContractionDetector:
 
 class SignalValidator:
     """
-    Validates individual technical signals (volume dry-up, ATR contraction, RSI strength, etc.) to confirm VCP validity.
-    Each method checks one aspect and returns (is_valid, message); signals include volume, volatility, momentum, and price position.
+    Validate individual technical signals that confirm VCP pattern
+    This class checks specific conditions that should be present in a
+    valid VCP setup. Each method validates one aspect of the pattern.
+
+    Signals validated:
+    - Volume dry-up: Volume decreasing during contractions
+    - ATR contraction: Volatility decreasing significantly
+    - RSI strength: RSI staying elevated (not oversold)
+    - MA alignment: Moving averages in bullish order
+    - Price position: Price near 52-week highs
+    - Tight consolidation: Recent tight price action
+
+    Each validation returns a tuple of (is_valid, message) to provide
+    both the result and context.
     """
     
     @staticmethod
     def check_volume_dryup(df: pd.DataFrame, contractions: List[Contraction], config: VCPConfig) -> Tuple[bool, str]:
         """
-        Checks if volume has dried up in later contractions (below threshold of average).
-        Compares last contraction volume to overall average; low volume indicates exhausted sellers.
+        Check if volume is drying up in later contractions.
+        
+        In a healthy VCP, volume should decline during contractions as
+        sellers are exhausted. Lower volume = less selling pressure.
+        
+        We want to see the final contraction's volume well below average,
+        indicating that selling has dried up and the stock is ready to
+        move higher on any buying interest.
+        
+        Args:
+            df: DataFrame with 'volume' column
+            contractions: List of Contraction objects
+            config: VCPConfig with volume thresholds
+        
+        Returns:
+            Tuple of (is_valid, message)
+            - is_valid: True if volume has dried up sufficiently
+            - message: String explaining the result
+        
+        Validation:
+            PASS: Last contraction's avg volume < 60% of overall average
+            FAIL: Last contraction's volume still high (> 60% of average)
+        
+        Example:
+            >>> is_valid, msg = check_volume_dryup(df, contractions, config)
+            >>> print(msg)
+            "Volume dry-up: 45% of average (✓ target: <60%)"
         """
         # Need contractions to analyze
         if not contractions:
@@ -1175,8 +1205,34 @@ class SignalValidator:
     @staticmethod
     def check_atr_contraction(df: pd.DataFrame, contractions: List[Contraction], config: VCPConfig) -> Tuple[bool, str]:
         """
-        Checks if ATR has contracted sufficiently (below threshold ratio from initial).
-        Measures volatility reduction; significant decline indicates coiling pattern.
+        Check if ATR (volatility) has contracted sufficiently.
+        
+        The hallmark of a VCP is contracting volatility. We want to see
+        ATR declining from the first contraction to the last, indicating
+        that price swings are getting smaller (coiling pattern).
+        
+        A significant ATR reduction (e.g., 30%+ decline) shows the stock
+        is "coiling" and ready for an expansion phase.
+        
+        Args:
+            df: DataFrame with 'atr' column
+            contractions: List of Contraction objects
+            config: VCPConfig with ATR threshold
+        
+        Returns:
+            Tuple of (is_valid, message)
+        
+        Validation:
+            PASS: Latest ATR ≤ 70% of initial ATR (30%+ reduction)
+            FAIL: ATR hasn't contracted enough
+        
+        Example:
+            >>> is_valid, msg = check_atr_contraction(df, contractions, config)
+            >>> print(msg)
+            "ATR contraction: 65% of initial (✓ target: <70%)"
+            
+            This shows ATR has dropped to 65% of its initial value
+            (35% reduction), which exceeds our 30% target.
         """
         if not contractions:
             return False, "No contractions to analyze"
@@ -1201,8 +1257,37 @@ class SignalValidator:
     @staticmethod
     def check_rsi_strength(df: pd.DataFrame, contractions: List[Contraction], config: VCPConfig) -> Tuple[bool, str]:
         """
-        Checks if RSI shows strength (above floor in later contractions, in consolidation range).
-        Ensures RSI makes higher lows and stays elevated; shows consolidation from strength.
+        Check if RSI shows underlying strength during contractions.
+        
+        In a strong VCP, RSI should:
+        1. Stay above 40 in later contractions (not oversold)
+        2. Make higher lows (each pullback less deep than previous)
+        3. Be in the 48-65 range currently (coiled but not overbought)
+        
+        This shows the stock is consolidating from a position of strength,
+        not weakness. Weak stocks go oversold (RSI < 30) during pullbacks.
+        
+        Args:
+            df: DataFrame with 'rsi' column
+            contractions: List of Contraction objects
+            config: VCPConfig with RSI thresholds
+        
+        Returns:
+            Tuple of (is_valid, message)
+        
+        Validation:
+            PASS: All later contractions have RSI > 40, current RSI in 48-65 range
+            FAIL: RSI went below 40, or current RSI outside range
+        
+        Example:
+            >>> is_valid, msg = check_rsi_strength(df, contractions, config)
+            >>> print(msg)
+            "RSI strength: Current 55.2, lows: ['42.5', '46.8', '51.3'] (✓)"
+            
+            This shows:
+            - Current RSI is 55.2 (in the good range)
+            - RSI lows are making higher lows (getting stronger)
+            - All lows above 40 (showing strength)
         """
         if not contractions:
             return False, "No contractions to analyze"
@@ -1235,8 +1320,31 @@ class SignalValidator:
     @staticmethod
     def check_ma_alignment(df: pd.DataFrame, config: VCPConfig) -> Tuple[bool, str]:
         """
-        Checks if moving averages are in bullish alignment (shorter above longer).
-        Daily: 21>50>200; Weekly: 10>40; confirms uptrend for VCP formation.
+        Check if moving averages are in bullish alignment.
+        
+        For a valid VCP, we want moving averages stacked properly:
+        - Daily: 21 EMA > 50 SMA > 200 SMA (all rising)
+        - Weekly: 10 MA > 40 MA (both rising)
+        
+        This confirms the overall trend is up. VCP patterns form within
+        uptrends, not downtrends.
+        
+        Args:
+            df: DataFrame with MA columns (ma_21, ma_50, ma_200, etc.)
+            config: VCPConfig with MA settings
+        
+        Returns:
+            Tuple of (is_valid, message)
+        
+        Validation:
+            Daily PASS: 21 EMA > 50 SMA > 200 SMA
+            Weekly PASS: 10 MA > 40 MA
+            FAIL: MAs not in proper order
+        
+        Example:
+            >>> is_valid, msg = check_ma_alignment(df, config)
+            >>> print(msg)
+            "MA alignment (daily): 21EMA > 50SMA > 200SMA (✓)"
         """
         # If MA alignment not required by config, pass automatically
         if not config.ma_alignment_required:
@@ -1274,8 +1382,30 @@ class SignalValidator:
     @staticmethod
     def check_price_near_highs(df: pd.DataFrame) -> Tuple[bool, str]:
         """
-        Checks if current price is near 52-week highs (within 10%).
-        Shows stock is leading; less resistance for breakout.
+        Check if price is near 52-week highs.
+        
+        VCP patterns typically form as a stock consolidates near its highs.
+        This is important because:
+        1. Shows the stock is leading, not lagging
+        2. Less overhead resistance (fewer bag-holders)
+        3. More likely to breakout to new highs
+        
+        We want the stock within 10% of its 52-week high.
+        
+        Args:
+            df: DataFrame with 'high' and 'close' columns
+        
+        Returns:
+            Tuple of (is_valid, message)
+        
+        Validation:
+            PASS: Current price within 10% of 52-week high
+            FAIL: More than 10% below high
+        
+        Example:
+            >>> is_valid, msg = check_price_near_highs(df)
+            >>> print(msg)
+            "Price position: 3.2% from 52-week high (✓ target: <10%)"
         """
         # Look back up to 252 days (52 weeks) or available data
         lookback = min(252, len(df))
@@ -1298,13 +1428,36 @@ class SignalValidator:
         
         return is_valid, message
     
-    
     @staticmethod
     def check_tight_consolidation(df: pd.DataFrame, config: VCPConfig) -> Tuple[bool, str]:
         """
-        Checks for tight price action in recent bars (small ranges, min consecutive tight days).
-        Counts days with range < threshold; tightness indicates readiness for breakout.
+        Check for tight price action in recent bars.
+        
+        The final phase of a VCP should show very tight price action:
+        - Small daily/weekly ranges (< 1.5% high-low)
+        - Multiple consecutive tight bars
+        - Price "coiling" before breakout
+        
+        This tightness shows the stock is ready to make a move.
+        The tighter the consolidation, the more powerful the breakout.
+        
+        Args:
+            df: DataFrame with 'high', 'low', 'close' columns
+            config: VCPConfig with tightness thresholds
+        
+        Returns:
+            Tuple of (is_valid, message)
+        
+        Validation:
+            PASS: At least 3 days with range < 1.5%
+            FAIL: Not enough tight days
+        
+        Example:
+            >>> is_valid, msg = check_tight_consolidation(df, config)
+            >>> print(msg)
+            "Tight consolidation: 5 tight days (avg range: 1.1%) (✓ target: ≥3)"
         """
+
         # Look at recent bars (last 10)
         lookback = min(10, len(df))
         recent_df = df.iloc[-lookback:]
@@ -1330,234 +1483,4 @@ class SignalValidator:
                 f"≥{config.min_tight_days})")
         
         return is_valid, message
-
-
-# ============================================================================
-# BATCH PROCESSING
-# ============================================================================
-
-def load_all_stock_data(start_date: str) -> pd.DataFrame:
-    """
-    Load historical stock data for all symbols from SQLite database beyond a start date.
-    
-    Args:
-        start_date: Start date in 'YYYY-MM-DD' format
-    
-    Returns:
-        DataFrame with multi-index (symbol, date) and columns: open, high, low, close, volume
-    """
-    try:
-        # Connect to SQLite database
-        db_path = cfg_vars.db_dir + cfg_vars.db_name
-        conn = sqlite3.connect(db_path)
-        
-        # Query all data for all symbols from start_date
-        query = """
-            SELECT tckr_symbol AS symbol, trade_dt AS date, open_price AS open, high_price AS high, low_price AS low, closing_price AS close, total_trading_volume AS volume
-            FROM historical_stocks
-            WHERE trade_dt >= ?
-            ORDER BY tckr_symbol, trade_dt         
-        """
-        df = pd.read_sql_query(query, conn, params=(start_date,))
-        
-        # Close the connection
-        conn.close()
-        
-        if df.empty:
-            return pd.DataFrame()
-        
-        # Convert date column to datetime
-        df['date'] = pd.to_datetime(df['date'])
-        
-        # Set multi-index: symbol and date
-        df.set_index(['symbol', 'date'], inplace=True)
-        
-        # Ensure columns are lowercase
-        df.columns = [col.lower() for col in df.columns]
-        
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading bulk stock data: {str(e)}")
-        return pd.DataFrame()
-
-
-def process_multiple_stocks(symbols: List[str], config: VCPConfig = None, max_workers: int = 4) -> Dict[str, VCPResult]:
-    """
-    Process multiple stocks concurrently for VCP patterns.
-    
-    This function loads all data once from the database, then filters for each symbol
-    in memory for faster processing.
-    
-    Args:
-        symbols: List of stock ticker symbols (e.g., ['AAPL', 'MSFT', 'GOOGL', 'TSLA'])
-        config: VCPConfig object with detection parameters (default: VCPConfig())
-        max_workers: Maximum number of concurrent threads (default: 4)
-    
-    Returns:
-        Dictionary mapping symbol to VCPResult object
-        Failed analyses will have VCPResult with is_vcp=False and error in messages
-    
-    Example:
-        >>> symbols = ['AAPL', 'MSFT', 'GOOGL', 'TSLA']
-        >>> config = VCPConfig(timeframe=Timeframe.DAILY)
-        >>> results = process_multiple_stocks(symbols, config)
-        >>> for symbol, result in results.items():
-        >>>     print(f"{symbol}: VCP={result.is_vcp}, Score={result.confidence_score:.1f}")
-    """
-    if config is None:
-        config = VCPConfig()
-    
-    # Load all stock data once (2 years back to cover all periods)
-    start_date = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
-    bulk_df = load_all_stock_data(start_date)
-    
-    if bulk_df.empty:
-        logger.error("No bulk data loaded from database")
-        return {symbol: VCPResult(
-            is_vcp=False, confidence_score=0.0, contractions=[],
-            current_stage="no_data", breakout_price=None, stop_loss=None,
-            signals={}, metrics={}, messages=["No data available"]
-        ) for symbol in symbols}
-    
-    def analyze_single_stock(symbol: str) -> Tuple[str, VCPResult]:
-        """Helper function to analyze one stock (used by ThreadPoolExecutor)"""
-        try:
-            # Filter data for this symbol
-            if symbol not in bulk_df.index.get_level_values(0):
-                return symbol, VCPResult(
-                    is_vcp=False, confidence_score=0.0, contractions=[],
-                    current_stage="no_data", breakout_price=None, stop_loss=None,
-                    signals={}, metrics={}, messages=[f"No data available for {symbol}"]
-                )
-            
-            df = bulk_df.loc[symbol].copy()
-            if df.empty:
-                return symbol, VCPResult(
-                    is_vcp=False, confidence_score=0.0, contractions=[],
-                    current_stage="no_data", breakout_price=None, stop_loss=None,
-                    signals={}, metrics={}, messages=[f"No data available for {symbol}"]
-                )
-            
-            # Calculate required technical indicators
-            df['atr'] = TechnicalIndicators.calculate_atr(df, 
-                config.daily_atr_period if config.timeframe == Timeframe.DAILY else config.weekly_atr_period)
-            df['rsi'] = TechnicalIndicators.calculate_rsi(df,
-                config.daily_rsi_period if config.timeframe == Timeframe.DAILY else config.weekly_rsi_period)
-            
-            # Calculate moving averages
-            ma_periods = [config.daily_ma_short, config.daily_ma_medium, config.daily_ma_long] if config.timeframe == Timeframe.DAILY else [config.weekly_ma_short, config.weekly_ma_long]
-            mas = TechnicalIndicators.calculate_moving_averages(df, ma_periods)
-            for period, ma_series in mas.items():
-                df[f'ma_{period}'] = ma_series
-            
-            # Detect contractions
-            contractions = ContractionDetector.identify_contractions(df, config)
-            is_valid, validation_msgs = ContractionDetector.validate_contraction_sequence(contractions, config)
-            
-            # Validate individual signals
-            signals = {}
-            signals['volume_dryup'], _ = SignalValidator.check_volume_dryup(df, contractions, config)
-            signals['atr_contraction'], _ = SignalValidator.check_atr_contraction(df, contractions, config)
-            signals['rsi_strength'], _ = SignalValidator.check_rsi_strength(df, contractions, config)
-            signals['ma_alignment'], _ = SignalValidator.check_ma_alignment(df, config)
-            signals['price_near_highs'], _ = SignalValidator.check_price_near_highs(df)
-            signals['tight_consolidation'], _ = SignalValidator.check_tight_consolidation(df, config)
-            
-            # Calculate confidence score based on signal validation
-            signal_count = len(signals)
-            valid_signals = sum(signals.values())
-            confidence_score = (valid_signals / signal_count) * 100 if signal_count > 0 else 0.0
-            
-            # Determine current stage
-            if not is_valid:
-                current_stage = "no_pattern"
-            elif df['close'].iloc[-1] > df['high'].iloc[-len(contractions[-1].duration_bars):].max() if contractions else False:
-                current_stage = "breaking_out"
-            else:
-                current_stage = "consolidating"
-            
-            """
-            # Create result object
-            result = VCPResult(
-                is_vcp=is_valid,
-                confidence_score=confidence_score,
-                contractions=contractions,
-                current_stage=current_stage,
-                breakout_price=df['high'].iloc[-1] * 1.02 if is_valid else None,  # Simple breakout estimate
-                stop_loss=df['low'].iloc[-1] * 0.95 if is_valid else None,       # Simple stop loss estimate
-                signals=signals,
-                metrics={
-                    'current_price': df['close'].iloc[-1],
-                    'current_rsi': df['rsi'].iloc[-1],
-                    'current_atr': df['atr'].iloc[-1]
-                },
-                messages=validation_msgs
-            )
-            
-            return symbol, result
-            """
-            # Determine current stage
-            if not is_valid:
-                current_stage = "no_pattern"
-            elif df['close'].iloc[-1] > df['high'].iloc[-len(contractions[-1].duration_bars):].max() if contractions else False:
-                current_stage = "breaking_out"
-            else:
-                current_stage = "consolidating"
-
-            # Define breakout_price and stop_loss
-            breakout_price = df['high'].iloc[-1] * 1.02 if is_valid else None
-            stop_loss = df['low'].iloc[-1] * 0.95 if is_valid else None
-
-            # Create output DataFrame with per-date data
-            df_output = df.copy()
-            df_output.reset_index(inplace=True)  # Make 'date' a column
-
-            # Add VCP results (repeated for each date)
-            df_output['is_vcp'] = is_valid
-            df_output['confidence_score'] = confidence_score
-            df_output['current_stage'] = current_stage
-            df_output['breakout_price'] = breakout_price
-            df_output['stop_loss'] = stop_loss
-
-            # Add signals (repeated for each date)
-            for sig_name, sig_value in signals.items():
-                df_output[sig_name] = sig_value
-
-            # Add metrics (repeated for each date)
-            df_output['current_price'] = df['close'].iloc[-1]
-            df_output['current_rsi'] = df['rsi'].iloc[-1]
-            df_output['current_atr'] = df['atr'].iloc[-1]
-
-            return symbol, df_output
-
-        except Exception as e:
-            logger.error(f"Error analyzing {symbol}: {str(e)}")
-            return symbol, pd.DataFrame()    
-        
-    # Process stocks concurrently
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
-        future_to_symbol = {executor.submit(analyze_single_stock, symbol): symbol for symbol in symbols}
-        
-        # Collect results as they complete
-        for future in concurrent.futures.as_completed(future_to_symbol):
-            symbol = future_to_symbol[future]
-            try:
-                sym, df_result = future.result()
-                if not df_result.empty:
-                    df_result['symbol'] = sym  # Add symbol column
-                    results.append(df_result)
-                logger.info(f"Completed analysis for {sym}")
-            except Exception as exc:
-                logger.error(f"Exception processing {symbol}: {exc}")
-
-    # Concatenate all results into a single DataFrame
-    if results:
-        final_df = pd.concat(results, ignore_index=True)
-    else:
-        final_df = pd.DataFrame()
-
-    return final_df
 

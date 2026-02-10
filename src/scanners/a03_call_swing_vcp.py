@@ -28,6 +28,7 @@ from loguru import logger
 #------------------------------------------------------------------------------
 from config import cfg_nifty, cfg_vars
 from src.utils import util_funcs
+from src.classes.scanner.cl_Swing_VCP import process_multiple_stocks, VCPConfig, Timeframe
 from src.classes.scanner.cl_Swing_VCP import (Timeframe, VCPConfig, Contraction, 
     VCPResult, DataLoader, TechnicalIndicators, 
     PivotDetector, ContractionDetector, SignalValidator)
@@ -726,67 +727,43 @@ class VCPScanner:
 # ============================================================================
 
 def main():
-    """Example usage of VCP analyzer
-        This function shows:
-            1. How to create a configuration
-            2. How to analyze a single stock
-            3. How to interpret the results
-            4. How to scan multiple stocks
-    """
-    # Create configuration
-    config = VCPConfig(
-        timeframe=Timeframe.DAILY,
-        min_contractions=3
-    )
-    #------------------------------------------------------------------------------------------
-    #                         Single stock analysis
-    #------------------------------------------------------------------------------------------
-    print("="*70)
-    print("VCP PATTERN ANALYZER")
-    print("="*70)
+   
+    sector ='nifty100'  # 'test' / 'nifty100' / 'fno'/ 'fno_movers' / 'small_mid' / 'all'
+    
+    # Before saving the files, generate timestamp:
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    final_path = cfg_vars.swing_model_vcp_dir + f'{sector}_final_{timestamp}.xlsx'
+    all_stocks = cfg_nifty.nifty100 + cfg_nifty.nifty_fno + cfg_nifty.nifty_mid_small_caps + cfg_nifty.mono_duopoly_stocks
+    match sector:
+        case 'test': nifty_list = cfg_nifty.vcp
+        case 'nifty100': nifty_list = cfg_nifty.nifty_50 + cfg_nifty.nifty_next_50
+        case 'fno' : nifty_list = cfg_nifty.nifty_fno
+        case 'fno_movers_poly': nifty_list = cfg_nifty.top_30_fno_swing + cfg_nifty.nifty_movers + cfg_nifty.mono_duopoly_stocks
+        case 'small_mid': nifty_list = cfg_nifty.nifty_mid_small_caps
+        case 'all': nifty_list = all_stocks
+        case _: print("Invalid Sector")  
+    # Sort the list alphabetically
+    nifty_list = sorted(list(set(nifty_list)))
 
-    analyzer = VCPAnalyzer(config)
-
-    # Analyze a stock
-    symbol = "INFY"
-    result = analyzer.analyze(symbol, period="1y")
-
-    # Print results
-    print(f"\nAnalyzing: {symbol}")
-    print("-"*70)
-
-    for message in result.messages:
-        print(message)
-
-    print("\n" + "="*70)
-    print("SIGNAL SUMMARY")
-    print("="*70)
-
-    for signal, passed in result.signals.items():
-        status = "✓ PASS" if passed else "✗ FAIL"
-        print(f"{signal:.<30} {status}")
-
-    #-------------------------------------------------------------------------------------------
-    #                        Multiple stock analysis
-    #-------------------------------------------------------------------------------------------
-    # Batch scanning example
-    print("\n" + "="*70)
-    print("BATCH SCANNING")
-    print("="*70)
-
-    scanner = VCPScanner(config)
-
-    # Example stock list
-    watchlist = cfg_nifty.nifty_metal
-
-    scan_results = scanner.scan_stocks(watchlist, min_confidence=50.0)
-
-    if not scan_results.empty:
-        print("\nStocks with VCP patterns:")
-        print(scan_results.to_string(index=False))
+    config = VCPConfig(timeframe=Timeframe.DAILY)
+    
+    # Analyze all stocks concurrently
+    results = process_multiple_stocks(nifty_list, config, max_workers=4)
+    
+    if not results.empty:
+        # Save full per-date data to Excel
+        results.to_excel(final_path, index=False)
+        print(f"Output saved to {final_path}")
+        
+        # Print summary per symbol
+        summary = results.groupby('symbol').agg({
+            'is_vcp': 'first',
+            'confidence_score': 'first'
+        }).reset_index()
+        for _, row in summary.iterrows():
+            print(f"{row['symbol']}: VCP Pattern = {row['is_vcp']}, Confidence = {row['confidence_score']:.1f}")
     else:
-        print("\nNo VCP patterns found in watchlist")
-
+        print("No results to save.")
 #-------------------------------------------------------------------------------------------
 #                        Trigger the Swing Scanner
 #-------------------------------------------------------------------------------------------

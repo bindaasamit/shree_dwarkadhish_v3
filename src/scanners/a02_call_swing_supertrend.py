@@ -13,15 +13,15 @@ import concurrent.futures
 import yfinance as yf
 import pretty_errors
 import traceback
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple
+import matplotlib.pyplot as plt
+from enum import Enum
 
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 from loguru import logger
-
-from typing import List, Dict, Optional, Tuple
-import matplotlib.pyplot as plt
-
 
 #------------------------------------------------------------------------------
 ###            Import Modules 
@@ -52,7 +52,7 @@ logger.add(cfg_vars.scanner_log_path,
 #--------------------------------------------------------------------------------------------------------------------- 
 # Example usage
 if __name__ == "__main__":
-    sector ='all'  # 'test' / 'nifty100' / 'fno_movers' / 'small_mid' / 'all'
+    sector ='all'  # 'test' / 'nifty100' / 'fno'/ 'fno_movers' / 'small_mid' / 'all'
     start_date = '2024-01-01'
     #filter_date = '2025-11-01'
     filter_date = start_date
@@ -65,13 +65,16 @@ if __name__ == "__main__":
     summary_path = cfg_vars.swing_model_dir1 + f'{sector}_summary_{timestamp}.xlsx'
     backtest_path = cfg_vars.swing_model_dir1 + f'{sector}_backtest_results_{timestamp}.xlsx'
 
+    all_stocks = cfg_nifty.nifty100 + cfg_nifty.nifty_fno + cfg_nifty.nifty_mid_small_caps + cfg_nifty.mono_duopoly_stocks
     match sector:
         case 'test': nifty_list = cfg_nifty.nifty_test
-        case 'nifty': nifty_list = list(set(cfg_nifty.nifty100))
+        case 'nifty100': nifty_list = list(set(cfg_nifty.nifty_50 + cfg_nifty.nifty_next_50))
         case 'fno' : nifty_list = cfg_nifty.nifty_fno
+        case 'fno_movers_poly': nifty_list = list(set(cfg_nifty.top_30_fno_swing + cfg_nifty.nifty_movers + cfg_nifty.mono_duopoly_stocks))
         case 'small_mid': nifty_list = cfg_nifty.nifty_mid_small_caps
-        case 'all': nifty_list = list(set(cfg_nifty.nifty100 + cfg_nifty.nifty_fno))  
+        case 'all': nifty_list = list(set(all_stocks))  
         case _: print("Invalid Sector")    
+        
     
     # Sort the list alphabetically
     nifty_list = sorted(nifty_list)
@@ -119,24 +122,12 @@ if __name__ == "__main__":
     #Filterout all records where duration_watchlist_to_buy is more than 20 days
     summary_df = summary_df[summary_df['duration_watchlist_to_buy'] <=20]
 
-    #Check Rejections
-    # View rejections
-    #rejected = summary_df[summary_df['buy_signal_rejected'] == True]
-    #print(rejected[['tckr_symbol', 'rejection_reason', 'position_in_range', 'distance_to_recent_high']])
-    # Should show IDEA/RVNL with reasons like:
-    # - 'too_close_to_resistance'
-    # - High position_in_range (>0.60)
-    
-    # These rejections Would have been profitable]
-    #good_rejected = summary_df[(summary_df['buy_signal_rejected']) & (summary_df['profit_or_loss'] > 0)]
-    #print(good_rejected[['tckr_symbol', 'rejection_reason', 'profit_or_loss']])
-
     ###Step4. Get Weekly Trend Data for the Identified Buy Signals Only
-    weekly_data_path = cfg_vars.weekly_data_dir + f'stocks_weekly_data.xlsx'
-    summary_df1 = get_weekly_trend(summary_df,weekly_data_path)    
+    #weekly_data_path = cfg_vars.weekly_data_dir + f'stocks_weekly_data.xlsx'
+    #summary_df1 = get_weekly_trend(summary_df,weekly_data_path)    
 
     ###Step4 Save Results
-    summary_df1.to_excel(summary_path, index=False)
+    summary_df.to_excel(summary_path, index=False)
     
     #combined_df.reset_index().to_excel(swing_path1, index=False)
     #combined_filtd_df.reset_index().to_excel(swing_path2, index=False)  # Include date as a column

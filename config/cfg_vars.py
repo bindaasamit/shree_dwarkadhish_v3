@@ -11,7 +11,9 @@ volatility_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/volatili
 
 emascalpmodel_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/ema_scalp_model/'
 swing_model_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/swing_model/'
-swing_model_dir1 = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/swing_model_v1/'
+swing_model_dir1 = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/swing_model_supertrend/'
+swing_model_dir2 = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/swing_model_breakout/'
+swing_vcp_model_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/swing_model_vcp/'
 weekly_data_dir= 'D:/myCourses/shree_dwarkadhish_v5/data/output/results/weekly_data/'
 db_dir = 'D:/myCourses/shree_dwarkadhish_v5/data/db/'
 
