@@ -54,10 +54,10 @@ def main():
     start_date = '2020-01-01'
     weekly_data_path = cfg_vars.weekly_data_dir + f'stocks_weekly_data.xlsx'
     
-    nifty_list = sorted(list(set(cfg_nifty.nifty100 + cfg_nifty.nifty_fno + cfg_nifty.nifty_mid_small_caps + cfg_nifty.mono_duopoly_stocks)))
-    #nifty_list = sorted(list(set(cfg_nifty.nifty_test)))
+    #nifty_list = sorted(list(set(cfg_nifty.nifty100 + cfg_nifty.nifty_fno + cfg_nifty.nifty_mid_small_caps + cfg_nifty.mono_duopoly_stocks)))
+    nifty_list = sorted(list(set(cfg_nifty.nifty_cash_list)))
 
-    task = 'gen_week_inds'  # 'load_only' / 'gen_week_inds' 
+    task = 'gen_week_inds'  # 'load_only' / 'gen_week_inds' /'both
     
     match task:
         case 'load_only': 
@@ -73,7 +73,17 @@ def main():
             # Save to Excel
             weekly_data.to_excel(weekly_data_path, index=False)
             print(f"Weekly data saved to {weekly_data_path}")        
+        case 'both': 
+            load_incremental_data(incremental_dir)    
+            stocks_df = read_nse_data(nifty_list, start_date)    
+            weekly_data = daily_to_weekly(stocks_df)
 
+            ### Generate all other Weekly Indicators
+            weekly_data = gen_weekly_indicators(weekly_data)
+            
+            # Save to Excel
+            weekly_data.to_excel(weekly_data_path, index=False)
+            print(f"Weekly data saved to {weekly_data_path}")        
         case _: print("Invalid Task")
     
 if __name__ == "__main__":

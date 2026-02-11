@@ -69,11 +69,6 @@ class VCPAnalyzer:
     Usage:
         analyzer = VCPAnalyzer()
         result = analyzer.analyze('AAPL')
-    FIXES applied here:
-    - prepare_data uses min_periods=1 for indicators
-    - confidence_score uses lenient thresholds (50 instead of 60)
-    - fail_reasons collected for easy debugging
-    - Added diagnostic mode to print why pattern failed
     """
     
     def __init__(self, config: Optional[VCPConfig] = None):
@@ -93,7 +88,7 @@ class VCPAnalyzer:
             >>> analyzer = VCPAnalyzer(custom_config)
         """
         self.config = config or VCPConfig()
-        #self.data_loader = DataLoader()
+        self.data_loader = DataLoader()
         self.indicators = TechnicalIndicators()
         self.contraction_detector = ContractionDetector()
         self.signal_validator = SignalValidator()
@@ -132,47 +127,50 @@ class VCPAnalyzer:
             >>> enriched_df = analyzer.prepare_data(raw_df)
             >>> print(enriched_df.columns)
             ['open', 'high', 'low', 'close', 'volume', 'atr', 'bb_width', 'rsi', ...]
-        FIX: Ensure all indicator calculations use min_periods=1
-             so we don't lose rows at the beginning.
         """
-        tf = self.config.timeframe
-
-        atr_p = self.config.daily_atr_period if tf == Timeframe.DAILY \
-                else self.config.weekly_atr_period
-        df['atr'] = self.indicators.calculate_atr(df, atr_p)
-
-        bb_p = self.config.daily_bb_period if tf == Timeframe.DAILY \
-               else self.config.weekly_bb_period
-        df['bb_width'] = self.indicators.calculate_bb_width(df, bb_p)
-
-        rsi_p = self.config.daily_rsi_period if tf == Timeframe.DAILY \
-                else self.config.weekly_rsi_period
-        df['rsi'] = self.indicators.calculate_rsi(df, rsi_p)
-
-        if tf == Timeframe.DAILY:
+        timeframe = self.config.timeframe
+    
+        # Calculate ATR with appropriate period for timeframe
+        atr_period = (self.config.daily_atr_period if timeframe == Timeframe.DAILY 
+                    else self.config.weekly_atr_period)
+        df['atr'] = self.indicators.calculate_atr(df, atr_period)
+        
+        # Calculate Bollinger Bands
+        bb_period = (self.config.daily_bb_period if timeframe == Timeframe.DAILY 
+                    else self.config.weekly_bb_period)
+        df['bb_upper'], df['bb_middle'], df['bb_lower'] = \
+            self.indicators.calculate_bollinger_bands(df, bb_period)
+        df['bb_width'] = self.indicators.calculate_bb_width(df, bb_period)
+        
+        # Calculate RSI
+        rsi_period = (self.config.daily_rsi_period if timeframe == Timeframe.DAILY 
+                    else self.config.weekly_rsi_period)
+        df['rsi'] = self.indicators.calculate_rsi(df, rsi_period)
+        
+        # Calculate Moving Averages - different sets for daily vs weekly
+        if timeframe == Timeframe.DAILY:
             ma_periods = [
-                self.config.daily_ma_short,
-                self.config.daily_ma_medium,
-                self.config.daily_ma_long
+                self.config.daily_ma_short,   # 21
+                self.config.daily_ma_medium,  # 50
+                self.config.daily_ma_long     # 200
             ]
-        else:
+        else:  # Weekly
             ma_periods = [
-                self.config.weekly_ma_short,
-                self.config.weekly_ma_long
+                self.config.weekly_ma_short,  # 10
+                self.config.weekly_ma_long    # 40
             ]
-
+        
+        # Calculate each MA and add to dataframe
         mas = self.indicators.calculate_moving_averages(df, ma_periods)
         for period, ma in mas.items():
             df[f'ma_{period}'] = ma
-
+        
+        # Calculate OBV
         df['obv'] = self.indicators.calculate_obv(df)
-
-        # FIX: Use dropna only on critical columns, not all columns
-        # This preserves more rows
-        critical_cols = ['atr', 'rsi', 'close', 'high', 'low', 'volume']
-        df = df.dropna(subset=critical_cols)
-
-        return df
+        
+        # Remove any rows with NaN values (from indicator calculations)
+        # This typically removes the first ~200 rows on daily charts
+        return df.dropna()
     
     def calculate_confidence_score(self, signals: Dict[str, bool], contractions: List[Contraction]) -> float:
         """
@@ -211,27 +209,34 @@ class VCPAnalyzer:
             >>> score = calculate_confidence_score(signals, contractions)
             >>> print(f"Confidence: {score:.1f}%")
             Confidence: 72.5%
-        FIX: Rebalanced weights; 'contraction_sequence' is most critical.
         """
         # Define weights for each signal (total = 100)
         # More important signals get higher weights
         weights = {
-            'contraction_sequence': 30,   # Most important
-            'volume_dryup':         15,
-            'atr_contraction':      15,
-            'rsi_strength':         15,
-            'ma_alignment':         10,
-            'price_near_highs':     10,
-            'tight_consolidation':  5,    # Least critical (was 10)
+            'volume_dryup': 15,           # Critical: volume must dry up
+            'atr_contraction': 15,        # Critical: volatility must contract
+            'rsi_strength': 15,           # Critical: must show strength
+            'ma_alignment': 10,           # Important: trend confirmation
+            'price_near_highs': 10,       # Important: leadership
+            'tight_consolidation': 10,    # Important: coiling action
+            'contraction_sequence': 25     # Most critical: proper VCP structure
         }
-        score = sum(weights.get(sig, 0) for sig, passed in signals.items() if passed)
-
-        # Bonus for contraction count
-        n = len(contractions)
-        if n == 4:   score += 10
-        elif n == 3: score += 5
-        elif n >= 5: score += 3
-
+        
+        score = 0.0
+        
+        # Add points for each passed signal
+        for signal, passed in signals.items():
+            if passed and signal in weights:
+                score += weights[signal]
+        
+        # Bonus points for optimal contraction count
+        # 4 contractions is considered optimal (classic VCP)
+        if len(contractions) == 4:
+            score += 10  # Bonus for perfect count
+        elif len(contractions) == 3:
+            score += 5   # Smaller bonus for minimum count
+        
+        # Cap score at 100
         return min(score, 100.0)
     
     def determine_stage(self, df: pd.DataFrame, contractions: List[Contraction]) -> str:
@@ -269,27 +274,38 @@ class VCPAnalyzer:
             >>> elif stage == 'consolidating':
             >>>     print("Still waiting - set alert at breakout level")
         """
-        """Determine current VCP stage."""
         if not contractions:
             return "no_pattern"
-
+        
+        # Get current price
         current_price = df['close'].iloc[-1]
-        last_c        = contractions[-1]
-
-        # FIX: Use positional indexing for consolidation high
-        consol_high = df['high'].iloc[last_c.start_pos:].max()
-
-        vol_period  = (self.config.daily_volume_period
-                       if self.config.timeframe == Timeframe.DAILY
-                       else self.config.weekly_volume_period)
-        avg_vol     = df['volume'].iloc[-vol_period:].mean()
-        curr_vol    = df['volume'].iloc[-1]
-
-        if (current_price > consol_high * 1.02 and
-                curr_vol > avg_vol * self.config.breakout_volume_threshold):
+        
+        # Find the last contraction
+        last_contraction = contractions[-1]
+        
+        # Find the highest point of the consolidation
+        # (from start of last contraction to present)
+        consolidation_high = df['high'].iloc[last_contraction.start_idx:].max()
+        
+        # Calculate average volume
+        volume_period = (self.config.daily_volume_period 
+                        if self.config.timeframe == Timeframe.DAILY 
+                        else self.config.weekly_volume_period)
+        avg_volume = df['volume'].iloc[-volume_period:].mean()
+        current_volume = df['volume'].iloc[-1]
+        
+        # Determine stage based on price and volume
+        
+        # Breaking out: Price >2% above high AND volume significantly elevated
+        if (current_price > consolidation_high * 1.02 and 
+            current_volume > avg_volume * self.config.breakout_volume_threshold):
             return "breaking_out"
-        elif current_price > consol_high * 1.10:
+        
+        # Extended: Price >10% above consolidation high (breakout already happened)
+        elif current_price > consolidation_high * 1.10:
             return "extended"
+        
+        # Still consolidating: Price still in the range
         else:
             return "consolidating"
     
@@ -325,20 +341,30 @@ class VCPAnalyzer:
             Stop: $48.50
             Risk: 5.27%
         """
-        """Calculate entry and stop levels."""
         if not contractions:
             return None, None
-
-        last_c      = contractions[-1]
-        consol_high = df['high'].iloc[last_c.start_pos:].max()
-        entry_price = consol_high * 1.02
-
-        consol_low  = df['low'].iloc[last_c.start_pos:].min()
-        swing_stop  = consol_low * 0.98
+        
+        # Get last contraction
+        last_contraction = contractions[-1]
+        
+        # Entry: 2% above the consolidation high
+        # This filters out false breakouts and ensures commitment
+        consolidation_high = df['high'].iloc[last_contraction.start_idx:].max()
+        entry_price = consolidation_high * 1.02  # 2% above high
+        
+        # Stop Loss Method 1: Below last swing low
+        # Find the lowest low in the consolidation
+        consolidation_low = df['low'].iloc[last_contraction.start_idx:].min()
         current_atr = df['atr'].iloc[-1]
-        atr_stop    = entry_price - (2 * current_atr)
-
-        stop_loss   = max(atr_stop, swing_stop)
+        
+        # Use tighter of the two
+        atr_stop = entry_price - (2 * current_atr)
+        swing_stop = consolidation_low * 0.98
+        
+        # Use the tighter (higher) of the two stops
+        # This provides better risk/reward while still allowing breathing room
+        stop_loss = max(atr_stop, swing_stop)
+        
         return entry_price, stop_loss
     
     def analyze(self, symbol: str, period: str = "1y") -> VCPResult:
@@ -392,109 +418,152 @@ class VCPAnalyzer:
             >>>     print("No VCP pattern detected")
             >>>     for msg in result.messages:
             >>>         print(f"  {msg}")
-        FIX: Accepts pre-loaded DataFrame instead of downloading.
-             This suits the SQLite-based architecture described.
-        
-        Added fail_reasons to VCPResult for easy debugging.
-        Returns:
-            VCPResult with full analysis
         """
-        messages    = []
-        fail_reasons = []
-
+        messages = []
+        
         try:
-            df = df_input.copy()
-
-            # Ensure columns are lowercase
-            df.columns = [c.lower() for c in df.columns]
-
-            # Validate required columns
-            required = ['open', 'high', 'low', 'close', 'volume']
-            missing  = [c for c in required if c not in df.columns]
-            if missing:
-                raise ValueError(f"Missing columns: {missing}")
-
-            messages.append(f"[{symbol}] Loaded {len(df)} bars")
-
-            # Add indicators
+            # ================================================================
+            # STEP 1: LOAD DATA
+            # ================================================================
+            df = self.data_loader.load_stock_data(symbol, period)
+            messages.append(f"Loaded {len(df)} bars of data for {symbol}")
+            
+            # ================================================================
+            # STEP 2: CONVERT TO WEEKLY IF NEEDED
+            # ================================================================
+            if self.config.timeframe == Timeframe.WEEKLY:
+                df = self.data_loader.convert_to_weekly(df)
+                messages.append(f"Converted to weekly timeframe: {len(df)} bars")
+            
+            # ================================================================
+            # STEP 3: CALCULATE TECHNICAL INDICATORS
+            # ================================================================
             df = self.prepare_data(df)
-            messages.append(f"[{symbol}] Indicators calculated, {len(df)} bars after dropna")
-
-            # Detect contractions in recent window
+            messages.append("Technical indicators calculated")
+            
+            # ================================================================
+            # STEP 4: DETECT CONTRACTIONS
+            # ================================================================
             contractions = self.contraction_detector.identify_contractions(df, self.config)
-            messages.append(f"[{symbol}] Found {len(contractions)} contractions")
-
-            for i, c in enumerate(contractions):
-                messages.append(
-                    f"  C{i+1}: depth={c.depth_percent:.1f}%, "
-                    f"dur={c.duration_bars}d, "
-                    f"atr={c.avg_atr:.2f}, "
-                    f"rsi_low={c.rsi_low:.1f}"
+            messages.append(f"Detected {len(contractions)} potential contractions")
+            
+            # Log details of each contraction found
+            if contractions:
+                for i, c in enumerate(contractions):
+                    messages.append(
+                        f"  Contraction {i + 1}: {c.depth_percent:.2f}% depth, "
+                        f"{c.duration_bars} bars"
+                    )
+            
+            # ================================================================
+            # STEP 5: VALIDATE CONTRACTION SEQUENCE
+            # ================================================================
+            sequence_valid, sequence_messages = \
+                self.contraction_detector.validate_contraction_sequence(
+                    contractions, self.config
                 )
-
-            # Validate contraction sequence
-            seq_valid, seq_msgs = self.contraction_detector.validate_contraction_sequence(
-                contractions, self.config
+            messages.extend(sequence_messages)
+            
+            # ================================================================
+            # STEP 6: VALIDATE INDIVIDUAL SIGNALS
+            # ================================================================
+            signals = {}  # Will store all signal validations
+            
+            # Check volume dry-up
+            vol_valid, vol_msg = self.signal_validator.check_volume_dryup(
+                df, contractions, self.config
             )
-            messages.extend(seq_msgs)
-            if not seq_valid:
-                fail_reasons.extend([m for m in seq_msgs if m.startswith("FAIL")])
-
-            # Individual signal checks
-            signals = {}
-
-            checks = [
-                ('volume_dryup',
-                 lambda: self.signal_validator.check_volume_dryup(df, contractions, self.config)),
-                ('atr_contraction',
-                 lambda: self.signal_validator.check_atr_contraction(df, contractions, self.config)),
-                ('rsi_strength',
-                 lambda: self.signal_validator.check_rsi_strength(df, contractions, self.config)),
-                ('ma_alignment',
-                 lambda: self.signal_validator.check_ma_alignment(df, self.config)),
-                ('price_near_highs',
-                 lambda: self.signal_validator.check_price_near_highs(df)),
-                ('tight_consolidation',
-                 lambda: self.signal_validator.check_tight_consolidation(df, self.config)),
-            ]
-
-            for name, fn in checks:
-                valid, msg = fn()
-                signals[name] = valid
-                messages.append(f"  [{name}] {msg}")
-                if not valid:
-                    fail_reasons.append(f"{name}: {msg}")
-
-            signals['contraction_sequence'] = seq_valid
-
-            # Confidence + decision
+            signals['volume_dryup'] = vol_valid
+            messages.append(vol_msg)
+            
+            # Check ATR contraction
+            atr_valid, atr_msg = self.signal_validator.check_atr_contraction(
+                df, contractions, self.config
+            )
+            signals['atr_contraction'] = atr_valid
+            messages.append(atr_msg)
+            
+            # Check RSI strength
+            rsi_valid, rsi_msg = self.signal_validator.check_rsi_strength(
+                df, contractions, self.config
+            )
+            signals['rsi_strength'] = rsi_valid
+            messages.append(rsi_msg)
+            
+            # Check MA alignment
+            ma_valid, ma_msg = self.signal_validator.check_ma_alignment(
+                df, self.config
+            )
+            signals['ma_alignment'] = ma_valid
+            messages.append(ma_msg)
+            
+            # Check price position
+            price_valid, price_msg = self.signal_validator.check_price_near_highs(df)
+            signals['price_near_highs'] = price_valid
+            messages.append(price_msg)
+            
+            # Check tight consolidation
+            tight_valid, tight_msg = self.signal_validator.check_tight_consolidation(
+                df, self.config
+            )
+            signals['tight_consolidation'] = tight_valid
+            messages.append(tight_msg)
+            
+            # Add contraction sequence validation to signals
+            signals['contraction_sequence'] = sequence_valid
+            
+            # ================================================================
+            # STEP 7: CALCULATE CONFIDENCE SCORE
+            # ================================================================
             confidence = self.calculate_confidence_score(signals, contractions)
-
-            # FIX: Lower threshold to 50 (was 60)
-            is_vcp = (confidence >= 50.0 and
-                      len(contractions) >= self.config.min_contractions)
-
-            stage        = self.determine_stage(df, contractions)
-            entry, stop  = self.calculate_entry_and_stop(df, contractions)
-
+            
+            # ================================================================
+            # STEP 8: DETERMINE IF THIS IS A VALID VCP
+            # ================================================================
+            # Needs minimum confidence (60%) and minimum contractions
+            is_vcp = (confidence >= 60.0 and 
+                    len(contractions) >= self.config.min_contractions)
+            
+            # ================================================================
+            # STEP 9: DETERMINE CURRENT STAGE
+            # ================================================================
+            stage = self.determine_stage(df, contractions)
+            
+            # ================================================================
+            # STEP 10: CALCULATE ENTRY AND STOP LEVELS
+            # ================================================================
+            entry, stop = self.calculate_entry_and_stop(df, contractions)
+            
+            # ================================================================
+            # STEP 11: COLLECT CURRENT METRICS
+            # ================================================================
             metrics = {
-                'current_price':       float(df['close'].iloc[-1]),
-                'current_atr':         float(df['atr'].iloc[-1]),
-                'current_rsi':         float(df['rsi'].iloc[-1]),
-                'bb_width':            float(df['bb_width'].iloc[-1]),
-                'num_contractions':    float(len(contractions)),
-                'latest_volume_ratio': float(
-                    df['volume'].iloc[-5:].mean() /
-                    max(df['volume'].iloc[-50:].mean(), 1)
-                ),
+                'current_price': df['close'].iloc[-1],
+                'current_atr': df['atr'].iloc[-1],
+                'current_rsi': df['rsi'].iloc[-1],
+                'bb_width': df['bb_width'].iloc[-1],
+                'num_contractions': len(contractions),
+                'latest_volume_ratio': (df['volume'].iloc[-5:].mean() / 
+                                    df['volume'].iloc[-50:].mean())
             }
-
-            messages.append(f"{'='*50}")
-            messages.append(f"[{symbol}] Result: {'VCP ✓' if is_vcp else 'NOT VCP ✗'} | "
-                           f"Confidence: {confidence:.1f}/100 | Stage: {stage}")
-            if fail_reasons:
-                messages.append(f"[{symbol}] Fail reasons: {'; '.join(fail_reasons)}")
-
+            
+            # ================================================================
+            # STEP 12: CREATE SUMMARY MESSAGES
+            # ================================================================
+            messages.append(f"\n{'='*60}")
+            messages.append(f"VCP Analysis Result: {'VALID VCP ✓' if is_vcp else 'NOT VCP ✗'}")
+            messages.append(f"Confidence Score: {confidence:.1f}/100")
+            messages.append(f"Current Stage: {stage}")
+            
+            if entry and stop:
+                risk_percent = ((entry - stop) / entry * 100)
+                messages.append(f"Entry Level: ${entry:.2f}")
+                messages.append(f"Stop Loss: ${stop:.2f}")
+                messages.append(f"Risk: {risk_percent:.2f}%")
+            
+            # ================================================================
+            # STEP 13: RETURN RESULTS
+            # ================================================================
             return VCPResult(
                 is_vcp=is_vcp,
                 confidence_score=confidence,
@@ -504,80 +573,23 @@ class VCPAnalyzer:
                 stop_loss=stop,
                 signals=signals,
                 metrics=metrics,
-                messages=messages,
-                fail_reasons=fail_reasons
+                messages=messages
             )
-
+        
         except Exception as e:
-            err = f"[{symbol}] ERROR: {str(e)}"
-            messages.append(err)
+            # If any error occurs, return error result
+            messages.append(f"Error during analysis: {str(e)}")
             return VCPResult(
-                is_vcp=False, confidence_score=0.0, contractions=[],
-                current_stage="error", breakout_price=None, stop_loss=None,
-                signals={}, metrics={}, messages=messages,
-                fail_reasons=[err]
+                is_vcp=False,
+                confidence_score=0.0,
+                contractions=[],
+                current_stage="error",
+                breakout_price=None,
+                stop_loss=None,
+                signals={},
+                metrics={},
+                messages=messages
             )
-
-# ============================================================================
-# DIAGNOSTIC TOOL - Run this to see WHY a stock is failing
-# ============================================================================
-
-def diagnose_stock(symbol: str, df: pd.DataFrame, config: VCPConfig = None) -> None:
-    """
-    Diagnostic tool to print exactly WHY a stock is failing VCP checks.
-    
-    Run this on stocks you KNOW are VCP patterns (from Chartink)
-    to see which specific checks are failing and tune parameters.
-    
-    Args:
-        symbol: Stock name (for display)
-        df: OHLCV DataFrame
-        config: VCPConfig (uses default if None)
-    
-    Example:
-        >>> df = load_stock_from_sqlite('RELIANCE')
-        >>> diagnose_stock('RELIANCE', df)
-    """
-    config   = config or VCPConfig()
-    analyzer = VCPAnalyzer(config)
-    result   = analyzer.analyze(symbol, df)
-
-    print(f"\n{'='*60}")
-    print(f"DIAGNOSTIC REPORT: {symbol}")
-    print(f"{'='*60}")
-
-    print(f"\nIS VCP: {result.is_vcp}")
-    print(f"CONFIDENCE: {result.confidence_score:.1f}/100")
-    print(f"STAGE: {result.current_stage}")
-    print(f"CONTRACTIONS FOUND: {len(result.contractions)}")
-
-    print(f"\n--- CONTRACTION DETAILS ---")
-    for i, c in enumerate(result.contractions):
-        print(f"  C{i+1}: {c.depth_percent:.1f}% depth | "
-              f"{c.duration_bars} bars | "
-              f"ATR={c.avg_atr:.2f} | "
-              f"RSI_low={c.rsi_low:.1f} | "
-              f"{c.start_date} → {c.end_date}")
-
-    print(f"\n--- SIGNALS ---")
-    for sig, passed in result.signals.items():
-        mark = "✓ PASS" if passed else "✗ FAIL"
-        print(f"  {sig:<25} {mark}")
-
-    print(f"\n--- FAIL REASONS ---")
-    if result.fail_reasons:
-        for r in result.fail_reasons:
-            print(f"  ✗ {r}")
-    else:
-        print("  None - pattern passed all checks")
-
-    print(f"\n--- METRICS ---")
-    for k, v in result.metrics.items():
-        print(f"  {k:<25} {v:.2f}")
-
-    print(f"\n--- FULL LOG ---")
-    for msg in result.messages:
-        print(f"  {msg}")
 # ============================================================================
 #                     BATCH SCANNER - FOR MULTIPLE STOCKS
 # ============================================================================
@@ -720,7 +732,7 @@ def main():
     
     # Before saving the files, generate timestamp:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    final_path = cfg_vars.swing_vcp_model_dir + f'{sector}_final_{timestamp}.xlsx'
+    final_path = cfg_vars.swing_model_vcp_dir + f'{sector}_final_{timestamp}.xlsx'
     all_stocks = cfg_nifty.nifty100 + cfg_nifty.nifty_fno + cfg_nifty.nifty_mid_small_caps + cfg_nifty.mono_duopoly_stocks
     match sector:
         case 'test': nifty_list = cfg_nifty.vcp
